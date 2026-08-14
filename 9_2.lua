@@ -1,7 +1,7 @@
 -- ========================================================
 -- 0 HUB v9.1 — STABILITY PATCH / NON-BLOCKING STARTUP
 -- ========================================================
-
+-- TTT11
 -- ========================================================
 -- 0 HUB v9.1 - RIVALS FPS EDITION
 -- FRAME-BUDGETED | NPC-AWARE | CRASH-PROOF LOOP DECOUPLING
@@ -2622,7 +2622,7 @@ local function UIRenderTab(tabName)
 
                 UITrack(moveConn)
                 UITrack(endConn)
-            end)
+            end))
         end
     end
 
