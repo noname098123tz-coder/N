@@ -1,6 +1,6 @@
 -- ========================================================
--- BIBILABU HUB - RIVALS FPS EDITION v4.0
--- OPTIMIZED FOR FPS GAMEPLAY | ANTI-CRASH | ANTI-BAN
+-- BIBILABU HUB - RIVALS FPS EDITION v4.1
+-- FIXED SELF-REFERENCE BUG | ANTI-CRASH | ANTI-BAN
 -- ========================================================
 
 -- // SERVICES
@@ -15,7 +15,7 @@ local LocalPlayer = Players.LocalPlayer
 
 -- // SCRIPT ENVIRONMENT
 local ScriptEnv = {
-    Version = "4.0.0",
+    Version = "4.1.0",
     Loaded = false,
     RuntimeErrors = 0,
     LastError = nil,
@@ -132,8 +132,9 @@ local function IsAlive(player)
     return hum and hum.Health > 0
 end
 
--- // TARGET ACQUISITION
-local TargetSystem = {
+-- // TARGET ACQUISITION - FIXED with forward declaration
+local TargetSystem
+TargetSystem = {
     CurrentTarget = nil,
     LastSwitchTime = 0,
     
@@ -242,8 +243,9 @@ local function CalculatePrediction(target)
     return part.Position + velocity * timeToTarget
 end
 
--- // ANTI-CRASH SYSTEM
-local AntiCrash = {
+-- // ANTI-CRASH SYSTEM - FIXED forward declaration
+local AntiCrash
+AntiCrash = {
     Active = Settings.AntiCrash,
     LastCleanup = 0,
     
@@ -259,36 +261,20 @@ local AntiCrash = {
             if collectgarbage then
                 collectgarbage("collect")
             end
-            -- Limit thread count
-            local activeThreads = 0
-            for _ in pairs(getfenv()) do activeThreads = activeThreads + 1 end
-            if activeThreads > 100 then
-                -- not much we can do, but warn
-                warn("[BIBILABU HUB] High thread count detected.")
-            end
         end
     end,
     
     Protect = function()
         if not AntiCrash.Active then return end
-        -- Override wait to avoid long hangs
-        local oldWait = task.wait
-        task.wait = function(...)
-            local args = {...}
-            if args[1] and type(args[1]) == "number" and args[1] > 30 then
-                args[1] = 30
-            end
-            return oldWait(unpack(args))
-        end
-        -- Protect against memory leaks
         game:GetService("RunService").Heartbeat:Connect(function()
             AntiCrash.Cleanup()
         end)
     end
 }
 
--- // ANTI-BAN / HOOKS
-local HookSystem = {
+-- // ANTI-BAN / HOOKS - FIXED forward declaration
+local HookSystem
+HookSystem = {
     HooksInstalled = false,
     Install = function()
         if HookSystem.HooksInstalled then return end
@@ -307,21 +293,6 @@ local HookSystem = {
                             local remoteName = tostring(self):lower()
                             if remoteName:find("ban") or remoteName:find("kick") or remoteName:find("detect") or remoteName:find("cheat") or remoteName:find("verify") or remoteName:find("admin") then
                                 return nil
-                            end
-                        end
-                    end
-                    -- Silent aim hook
-                    if Settings.SilentAim and (method == "FireServer" or method == "InvokeServer") then
-                        local target = TargetSystem.GetBestTarget()
-                        if target then
-                            local part = GetCharacterPart(target, Settings.TargetPart)
-                            if part then
-                                local aimCFrame = part.CFrame
-                                if Settings.Prediction then
-                                    local predPos = CalculatePrediction(target)
-                                    if predPos then aimCFrame = CFrame.new(predPos) end
-                                end
-                                -- modify remote args? harder, but we can at least hook __index on Hit/CFrame
                             end
                         end
                     end
@@ -379,8 +350,9 @@ local AimbotSystem = {
     end
 }
 
--- // TRIGGERBOT & AUTOFIRE
-local TriggerSystem = {
+-- // TRIGGERBOT & AUTOFIRE - FIXED forward declaration
+local TriggerSystem
+TriggerSystem = {
     LastTrigger = 0,
     LastAutoFire = 0,
     Update = function()
@@ -395,7 +367,6 @@ local TriggerSystem = {
                         local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
                         if dist < Settings.AimbotFOV * 0.2 then
                             TriggerSystem.LastTrigger = os.clock()
-                            -- simulate click
                             if getgenv then
                                 local vim = getgenv().VirtualInputManager
                                 if vim then
@@ -413,7 +384,6 @@ local TriggerSystem = {
         if Settings.AutoFire then
             if os.clock() - TriggerSystem.LastAutoFire >= Settings.AutoFireRate then
                 TriggerSystem.LastAutoFire = os.clock()
-                -- auto fire
                 if getgenv and getgenv().VirtualInputManager then
                     getgenv().VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, nil, 0)
                     task.wait(0.05)
@@ -424,8 +394,9 @@ local TriggerSystem = {
     end
 }
 
--- // ESP SYSTEM
-local ESPSystem = {
+-- // ESP SYSTEM - FIXED forward declaration
+local ESPSystem
+ESPSystem = {
     Drawings = {},
     Toggle = function()
         for _, drawingList in pairs(ESPSystem.Drawings) do
@@ -620,13 +591,14 @@ local MovementSystem = {
     end
 }
 
--- // PANIC MODE
-local PanicSystem = {
+-- // PANIC SYSTEM - FIXED forward declaration
+local PanicSystem
+PanicSystem = {
     Active = false,
+    SavedSettings = nil,
     Activate = function()
         if PanicSystem.Active then return end
         PanicSystem.Active = true
-        -- Save current settings
         PanicSystem.SavedSettings = {}
         for k,v in pairs(Settings) do
             if type(v) == "boolean" then
@@ -636,7 +608,6 @@ local PanicSystem = {
         end
         TargetSystem.Clear()
         if FOVCircle then FOVCircle.Visible = false end
-        -- Hide ESP
         for _, drawings in pairs(ESPSystem.Drawings) do
             for _, drawing in pairs(drawings) do
                 if drawing then drawing.Visible = false end
@@ -656,8 +627,9 @@ local PanicSystem = {
     end
 }
 
--- // NOTIFICATION SYSTEM
-local NotificationSystem = {
+-- // NOTIFICATION SYSTEM - FIXED forward declaration
+local NotificationSystem
+NotificationSystem = {
     Active = {},
     Max = 5,
     Notify = function(title, message, duration)
@@ -673,13 +645,11 @@ local NotificationSystem = {
             notif.Visible = true
             table.insert(NotificationSystem.Active, {Drawing = notif, Expires = os.clock() + duration})
             
-            -- Manage limit
             while #NotificationSystem.Active > NotificationSystem.Max do
                 local oldest = table.remove(NotificationSystem.Active, 1)
                 if oldest.Drawing then oldest.Drawing:Remove() end
             end
             
-            -- Remove after duration
             task.delay(duration, function()
                 for i, notifObj in pairs(NotificationSystem.Active) do
                     if notifObj.Drawing == notif then
@@ -735,7 +705,6 @@ local function CreateUI()
         MinimizeKey = Settings.MinimizeKey
     })
     
-    -- Tabs
     local Tabs = {
         Combat = Window:AddTab({ Title = "Combat", Icon = "crosshair" }),
         Aimbot = Window:AddTab({ Title = "Aimbot", Icon = "target" }),
@@ -950,7 +919,6 @@ local function CreateUI()
         end
     })
     
-    -- Notify loaded
     NotificationSystem.Notify("Bibilabu Hub", "Loaded successfully!", 3)
 end
 
@@ -974,9 +942,8 @@ RunService.Heartbeat:Connect(function()
     end)
 end)
 
--- // CHARACTER ADDED CLEANUP
+-- // CHARACTER ADDED CLEANUP (removed undefined TaskSystem)
 LocalPlayer.CharacterAdded:Connect(function(char)
-    TaskSystem.Clear()
     if Settings.Noclip then
         task.wait(0.5)
         for _, part in pairs(char:GetDescendants()) do
