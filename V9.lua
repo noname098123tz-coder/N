@@ -1596,3 +1596,549 @@ task.defer(function()
         Overlay.Tick()
     end)
 end)
+
+
+-- ========================================================
+-- // V9.1 — ROBLOX GUI FALLBACK
+-- // If Drawing is unavailable/blocked, the original menu
+-- // cannot render. This fallback uses ordinary ScreenGui
+-- // instances so the hub still has a visible control panel.
+-- ========================================================
+
+local FallbackUI = {
+    Gui = nil,
+    Main = nil,
+    Body = nil,
+    OpenButton = nil,
+    Visible = true,
+    Dragging = false,
+    DragOffset = nil,
+    Connections = {},
+    Built = false,
+}
+
+local function FallbackTrack(conn)
+    if conn then
+        table.insert(FallbackUI.Connections, conn)
+    end
+    return conn
+end
+
+local function GetGuiParent()
+    local ok, result = pcall(function()
+        if type(gethui) == "function" then
+            return gethui()
+        end
+        return game:GetService("CoreGui")
+    end)
+
+    if ok and result then
+        return result
+    end
+
+    local ok2, playerGui = pcall(function()
+        return LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    end)
+
+    return ok2 and playerGui or nil
+end
+
+local function NewGui(className)
+    local ok, obj = pcall(function()
+        return Instance.new(className)
+    end)
+
+    return ok and obj or nil
+end
+
+local function Apply(inst, props)
+    if not inst then
+        return inst
+    end
+
+    for key, value in pairs(props or {}) do
+        pcall(function()
+            inst[key] = value
+        end)
+    end
+
+    return inst
+end
+
+local function AddCorner(parent, radius)
+    local corner = NewGui("UICorner")
+    if not corner then
+        return
+    end
+
+    corner.CornerRadius = UDim.new(0, radius or 6)
+    corner.Parent = parent
+end
+
+local function AddStroke(parent, color, thickness)
+    local stroke = NewGui("UIStroke")
+    if not stroke then
+        return
+    end
+
+    stroke.Color = color or Color3.fromRGB(0, 215, 155)
+    stroke.Thickness = thickness or 1
+    stroke.Transparency = 0.15
+    stroke.Parent = parent
+end
+
+local function MakeButton(parent, text, size, position)
+    local button = NewGui("TextButton")
+    if not button then
+        return nil
+    end
+
+    Apply(button, {
+        Parent = parent,
+        BackgroundColor3 = Color3.fromRGB(28, 28, 36),
+        BorderSizePixel = 0,
+        Size = size,
+        Position = position,
+        Text = text,
+        TextColor3 = Color3.fromRGB(235, 235, 235),
+        TextSize = 13,
+        Font = Enum.Font.Gotham,
+        AutoButtonColor = true,
+    })
+
+    AddCorner(button, 5)
+    return button
+end
+
+local function DestroyFallback()
+    for _, conn in ipairs(FallbackUI.Connections) do
+        pcall(function()
+            conn:Disconnect()
+        end)
+    end
+
+    FallbackUI.Connections = {}
+
+    if FallbackUI.Gui then
+        pcall(function()
+            FallbackUI.Gui:Destroy()
+        end)
+    end
+
+    FallbackUI.Gui = nil
+    FallbackUI.Main = nil
+    FallbackUI.Body = nil
+    FallbackUI.OpenButton = nil
+end
+
+local function FallbackSetVisible(state)
+    FallbackUI.Visible = state
+
+    if FallbackUI.Main then
+        FallbackUI.Main.Visible = state
+    end
+
+    if FallbackUI.OpenButton then
+        FallbackUI.OpenButton.Visible = not state
+    end
+end
+
+local function SettingKeys(tab)
+    local result = {}
+
+    for key, cfg in pairs(Settings) do
+        if cfg.Tab == tab then
+            table.insert(result, key)
+        end
+    end
+
+    table.sort(result)
+    return result
+end
+
+local function SettingDisplayValue(cfg)
+    if cfg.Type == "toggle" then
+        return cfg.Value and "ON" or "OFF"
+    end
+
+    return tostring(cfg.Value)
+end
+
+local function FallbackApplySetting(key, amount)
+    local cfg = Settings[key]
+    if not cfg then
+        return
+    end
+
+    if cfg.Type == "toggle" then
+        cfg.Value = not cfg.Value
+
+        if key == "FullBright" then
+            if cfg.Value then
+                FB.On()
+            else
+                FB.Off()
+            end
+
+        elseif key == "FOVChanger" then
+            local cam = GetCamera()
+            if cam then
+                pcall(function()
+                    cam.FieldOfView =
+                        cfg.Value and (S("CustomFOV") or 90) or 70
+                end)
+            end
+
+        elseif key == "Chams" then
+            if cfg.Value then
+                for _, player in ipairs(GetPlayers()) do
+                    pcall(function()
+                        Chams.Apply(player)
+                    end)
+                end
+            else
+                for _, player in ipairs(GetPlayers()) do
+                    pcall(function()
+                        Chams.Remove(player)
+                    end)
+                end
+            end
+        end
+
+    elseif cfg.Type == "dropdown" then
+        if cfg.Options and #cfg.Options > 0 then
+            local current = 1
+
+            for index, option in ipairs(cfg.Options) do
+                if option == cfg.Value then
+                    current = index
+                    break
+                end
+            end
+
+            cfg.Value = cfg.Options[(current % #cfg.Options) + 1]
+        end
+
+    elseif cfg.Type == "slider" then
+        local minValue = cfg.Min or 0
+        local maxValue = cfg.Max or 100
+        local step = amount or ((maxValue - minValue) / 20)
+
+        cfg.Value = math.clamp(
+            (tonumber(cfg.Value) or minValue) + step,
+            minValue,
+            maxValue
+        )
+
+        cfg.Value = math.floor(cfg.Value * 100 + 0.5) / 100
+    end
+end
+
+local function BuildFallbackTab(tabName)
+    if not FallbackUI.Body then
+        return
+    end
+
+    for _, child in ipairs(FallbackUI.Body:GetChildren()) do
+        pcall(function()
+            if not child:IsA("UIListLayout") then
+                child:Destroy()
+            end
+        end)
+    end
+
+    local keys = SettingKeys(tabName)
+
+    for _, key in ipairs(keys) do
+        local cfg = Settings[key]
+
+        local row = NewGui("Frame")
+        if not row then
+            continue
+        end
+
+        Apply(row, {
+            Parent = FallbackUI.Body,
+            BackgroundColor3 = Color3.fromRGB(24, 24, 31),
+            BorderSizePixel = 0,
+            Size = UDim2.new(1, -8, 0, 34),
+        })
+
+        AddCorner(row, 5)
+
+        local label = NewGui("TextLabel")
+        Apply(label, {
+            Parent = row,
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, 10, 0, 0),
+            Size = UDim2.new(0.55, 0, 1, 0),
+            Text = key,
+            TextColor3 = Color3.fromRGB(235, 235, 235),
+            TextSize = 12,
+            Font = Enum.Font.Gotham,
+            TextXAlignment = Enum.TextXAlignment.Left,
+        })
+
+        local button = MakeButton(
+            row,
+            SettingDisplayValue(cfg),
+            UDim2.new(0.37, -4, 0, 24),
+            UDim2.new(0.63, 0, 0.5, -12)
+        )
+
+        if button then
+            FallbackTrack(button.MouseButton1Click:Connect(function()
+                FallbackApplySetting(key)
+                button.Text = SettingDisplayValue(cfg)
+
+                -- Re-apply dependent settings safely.
+                pcall(function()
+                    if key == "ChamStyle" and S("Chams") then
+                        for _, player in ipairs(GetPlayers()) do
+                            Chams.Apply(player)
+                        end
+                    end
+                end)
+            end))
+        end
+    end
+
+    local layout = NewGui("UIListLayout")
+    if layout then
+        layout.Parent = FallbackUI.Body
+        layout.Padding = UDim.new(0, 4)
+        layout.SortOrder = Enum.SortOrder.LayoutOrder
+    end
+end
+
+local function BuildFallback()
+    DestroyFallback()
+
+    local parent = GetGuiParent()
+    if not parent then
+        warn("[0 HUB V9.1] No GUI parent available; Drawing is also unavailable.")
+        return false
+    end
+
+    local gui = NewGui("ScreenGui")
+    if not gui then
+        return false
+    end
+
+    Apply(gui, {
+        Name = "ZeroHubV91Fallback",
+        Parent = parent,
+        ResetOnSpawn = false,
+        IgnoreGuiInset = true,
+        DisplayOrder = 1000000,
+        ZIndexBehavior = Enum.ZIndexBehavior.Global,
+    })
+
+    FallbackUI.Gui = gui
+
+    local main = NewGui("Frame")
+    if not main then
+        DestroyFallback()
+        return false
+    end
+
+    Apply(main, {
+        Parent = gui,
+        Name = "Main",
+        Position = UDim2.fromOffset(90, 90),
+        Size = UDim2.fromOffset(430, 470),
+        BackgroundColor3 = Color3.fromRGB(12, 12, 17),
+        BackgroundTransparency = 0.03,
+        BorderSizePixel = 0,
+        Active = true,
+        Visible = true,
+    })
+
+    AddCorner(main, 8)
+    AddStroke(main, Color3.fromRGB(0, 215, 155), 1)
+
+    FallbackUI.Main = main
+
+    local header = NewGui("Frame")
+    Apply(header, {
+        Parent = main,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 27),
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 42),
+        Active = true,
+    })
+
+    AddCorner(header, 8)
+
+    local title = NewGui("TextLabel")
+    Apply(title, {
+        Parent = header,
+        BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(12, 0),
+        Size = UDim2.new(1, -80, 1, 0),
+        Text = "0 HUB v9.1  |  FALLBACK UI",
+        TextColor3 = Color3.fromRGB(235, 235, 235),
+        TextSize = 15,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    })
+
+    local close = MakeButton(
+        header,
+        "×",
+        UDim2.fromOffset(34, 28),
+        UDim2.new(1, -42, 0.5, -14)
+    )
+
+    if close then
+        FallbackTrack(close.MouseButton1Click:Connect(function()
+            FallbackSetVisible(false)
+        end))
+    end
+
+    -- Dragging.
+    local dragStart
+    local startPos
+
+    FallbackTrack(header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            FallbackUI.Dragging = true
+            dragStart = input.Position
+            startPos = main.Position
+        end
+    end))
+
+    FallbackTrack(UserInputService.InputChanged:Connect(function(input)
+        if not FallbackUI.Dragging then
+            return
+        end
+
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement then
+            return
+        end
+
+        local delta = input.Position - dragStart
+
+        main.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end))
+
+    FallbackTrack(UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            FallbackUI.Dragging = false
+        end
+    end))
+
+    local tabsFrame = NewGui("Frame")
+    Apply(tabsFrame, {
+        Parent = main,
+        BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(8, 48),
+        Size = UDim2.new(1, -16, 0, 34),
+    })
+
+    local tabLayout = NewGui("UIListLayout")
+    Apply(tabLayout, {
+        Parent = tabsFrame,
+        FillDirection = Enum.FillDirection.Horizontal,
+        Padding = UDim.new(0, 4),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    })
+
+    local body = NewGui("ScrollingFrame")
+    Apply(body, {
+        Parent = main,
+        Name = "Body",
+        Position = UDim2.fromOffset(8, 88),
+        Size = UDim2.new(1, -16, 1, -98),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        ScrollBarThickness = 4,
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    })
+
+    FallbackUI.Body = body
+
+    local tabs = {"Aimbot", "ESP", "Visuals", "Movement", "Misc"}
+    local activeTab = "Aimbot"
+
+    for _, tabName in ipairs(tabs) do
+        local tabButton = MakeButton(
+            tabsFrame,
+            tabName,
+            UDim2.fromOffset(72, 30),
+            UDim2.fromOffset(0, 0)
+        )
+
+        if tabButton then
+            FallbackTrack(tabButton.MouseButton1Click:Connect(function()
+                activeTab = tabName
+                BuildFallbackTab(activeTab)
+            end))
+        end
+    end
+
+    local openButton = MakeButton(
+        gui,
+        "0",
+        UDim2.fromOffset(42, 42),
+        UDim2.fromOffset(14, 14)
+    )
+
+    if openButton then
+        openButton.TextSize = 18
+        openButton.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
+        openButton.TextColor3 = Color3.fromRGB(0, 215, 155)
+        AddStroke(openButton, Color3.fromRGB(0, 215, 155), 1)
+        openButton.Visible = false
+
+        FallbackTrack(openButton.MouseButton1Click:Connect(function()
+            FallbackSetVisible(true)
+        end))
+    end
+
+    FallbackUI.OpenButton = openButton
+    FallbackUI.Built = true
+
+    BuildFallbackTab(activeTab)
+
+    return true
+end
+
+-- Build only when Drawing isn't available. This is the missing UI path
+-- shown by the "startup complete" console message with no visible hub.
+local DrawingAvailable = (Drawing ~= nil)
+
+if not DrawingAvailable then
+    local ok, err = xpcall(BuildFallback, debug.traceback)
+
+    if ok and err then
+        print("[0 HUB v9.1] Drawing unavailable -> ScreenGui fallback enabled.")
+    else
+        warn("[0 HUB v9.1] Fallback UI failed:", tostring(err))
+    end
+else
+    print("[0 HUB v9.1] Drawing API detected -> native overlay/menu path active.")
+end
+
+-- Independent fallback hotkeys. These do not touch game-owned modules.
+FallbackTrack(UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then
+        return
+    end
+
+    if input.KeyCode == Enum.KeyCode.Insert
+        or input.KeyCode == Enum.KeyCode.F4
+        or input.KeyCode == Enum.KeyCode.Home then
+
+        if not DrawingAvailable and FallbackUI.Built then
+            FallbackSetVisible(not FallbackUI.Visible)
+        end
+    end
+end))
