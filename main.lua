@@ -1,7 +1,7 @@
--- ========================================================
+-- =======================================================
 -- BIBILABU HUB v7.1 - RIVALS FPS EDITION
 -- FRAME-BUDGETED | NPC-AWARE | CRASH-PROOF LOOP DECOUPLING
--- ========================================================
+-- =======================================================
 
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
