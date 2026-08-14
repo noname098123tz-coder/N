@@ -1,9 +1,9 @@
 -- ========================================================
--- 0 HUB — FIXED UI-FIRST BUILD / NON-BLOCKING STARTUP
+-- 0 HUB v8 — FIXED UI BUILD / NON-BLOCKING STARTUP
 -- ========================================================
 
 -- ========================================================
--- 0 HUB v7.1 - RIVALS FPS EDITION
+-- 0 HUB v8 - RIVALS FPS EDITION
 -- FRAME-BUDGETED | NPC-AWARE | CRASH-PROOF LOOP DECOUPLING
 -- ========================================================
 
@@ -72,16 +72,16 @@ local function SafeCall(fn, budget, ...)
     )
     if not ok then
         Runtime.Errors += 1
-        warn(("[0 HUB v7.1] ERR#%d → %s"):format(Runtime.Errors, tostring(err)))
+        warn(("[0 HUB v8] ERR#%d → %s"):format(Runtime.Errors, tostring(err)))
         if Runtime.Errors >= Runtime.MaxErrors then
-            warn("[0 HUB v7.1] error cap — killed")
+            warn("[0 HUB v8] error cap — killed")
             Runtime.Dead = true
         end
     end
     local elapsed = os.clock() - t0
     if budget and elapsed > budget then
         -- soft warn only, don't crash
-        -- warn(("[0 HUB v7.1] budget overrun: %.2fms / %.2fms"):format(elapsed*1000, budget*1000))
+        -- warn(("[0 HUB v8] budget overrun: %.2fms / %.2fms"):format(elapsed*1000, budget*1000))
     end
 end
 
@@ -904,7 +904,7 @@ function WM.Tick()
     local now = os.clock()
     if (now - WM.LastUpdate) >= 0.5 then  -- update text 2x/sec max
         WM.LastUpdate = now
-        SafeSet(WM.D,"Text",("0 HUB v7.1  |  errs:%d  |  %ds"):format(
+        SafeSet(WM.D,"Text",("0 HUB v8  |  errs:%d  |  %ds"):format(
             Runtime.Errors, math.floor(now-Runtime.StartTime)))
     end
     SafeSet(WM.D,"Visible",true)
@@ -997,8 +997,9 @@ function Menu.ClearDraw()
     Menu.Drw={}; Menu.Rows={}
 end
 function Menu.Build()
+    if not Menu or not Menu.Vis then return end
     Menu.ClearDraw()
-    if not Drawing or not Menu.Vis then return end
+    if not Drawing then return end
     local p=Menu.Pos; local W=Menu.W
     local tabW=math.floor(W/#Menu.Tabs)
     local rows={}
@@ -1009,7 +1010,7 @@ function Menu.Build()
     MD("Square",{Position=p,Size=Vector2.new(W,totalH),Color=BG1,Filled=true,Transparency=0.96})
     MD("Square",{Position=p,Size=Vector2.new(W,Menu.HdrH),Color=BG2,Filled=true,Transparency=1})
     MD("Square",{Position=p,Size=Vector2.new(3,Menu.HdrH),Color=AC,Filled=true,Transparency=1})
-    MD("Text",{Text="0 HUB  v7.1",Position=Vector2.new(p.X+12,p.Y+8),Size=15,Color=TPRI,Outline=true,OutlineColor=Color3.fromRGB(0,0,0)})
+    MD("Text",{Text="0 HUB  v8",Position=Vector2.new(p.X+12,p.Y+8),Size=15,Color=TPRI,Outline=true,OutlineColor=Color3.fromRGB(0,0,0)})
     MD("Text",{Text="[INS]",Position=Vector2.new(p.X+W-38,p.Y+9),Size=12,Color=TSEC,Outline=false})
     MD("Square",{Position=Vector2.new(p.X,p.Y+Menu.HdrH),Size=Vector2.new(W,Menu.TabH),Color=BG2,Filled=true,Transparency=1})
     for i,tab in ipairs(Menu.Tabs) do
@@ -1052,6 +1053,7 @@ end
 -- ========================================================
 local MenuBuildBusy = false
 local MenuBuildQueued = false
+local QueueMenuBuild
 
 local function SafeMenuBuild()
     if MenuBuildBusy then
@@ -1069,7 +1071,7 @@ local function SafeMenuBuild()
     task.defer(function()
         local ok, err = xpcall(function()
             if Menu.Vis then
-                QueueMenuBuild()
+                Menu.Build()
             else
                 Menu.ClearDraw()
             end
@@ -1086,12 +1088,12 @@ local function SafeMenuBuild()
 
         if MenuBuildQueued then
             MenuBuildQueued = false
-            task.defer(SafeMenuBuild)
+            task.defer(QueueMenuBuild)
         end
     end)
 end
 
-local function QueueMenuBuild()
+QueueMenuBuild = function()
     if not Menu or type(Menu.Build) ~= "function" then
         return
     end
@@ -1257,4 +1259,4 @@ task.defer(function()
     SafeCall(Hooks.Install)
 end)
 
-print("[0 HUB v7.1] UI-first startup complete.")
+print("[0 HUB v8] UI-first startup complete.")
