@@ -2142,3 +2142,823 @@ FallbackTrack(UserInputService.InputBegan:Connect(function(input, processed)
         end
     end
 end))
+
+
+-- ========================================================
+-- // V9.2 — UI REPAIR
+-- // Native ScreenGui is now the primary UI path.
+-- // Fixes:
+-- //   * invisible main panel
+-- //   * dead hamburger/reopen button
+-- //   * Insert/F4/Home state inversion
+-- //   * unreliable CoreGui/gethui parenting
+-- //   * broken slider/dropdown interaction
+-- //   * duplicate Drawing UI
+-- ========================================================
+
+local NativeUI = {
+    Gui = nil,
+    Main = nil,
+    Open = nil,
+    Body = nil,
+    TabBar = nil,
+    ActiveTab = "Aimbot",
+    Visible = true,
+    Dragging = false,
+    DragStart = nil,
+    MainStart = nil,
+    Connections = {},
+}
+
+local UI_COLORS = {
+    Background = Color3.fromRGB(10, 10, 14),
+    Panel      = Color3.fromRGB(16, 16, 22),
+    Header     = Color3.fromRGB(21, 21, 29),
+    Row        = Color3.fromRGB(23, 23, 31),
+    RowAlt     = Color3.fromRGB(27, 27, 36),
+    Accent     = Color3.fromRGB(0, 215, 155),
+    Text       = Color3.fromRGB(235, 235, 240),
+    Muted      = Color3.fromRGB(135, 135, 150),
+    Off        = Color3.fromRGB(54, 54, 66),
+    White      = Color3.fromRGB(255, 255, 255),
+}
+
+local function UITrack(conn)
+    if conn then
+        table.insert(NativeUI.Connections, conn)
+    end
+    return conn
+end
+
+local function UIDisconnect()
+    for _, conn in ipairs(NativeUI.Connections) do
+        pcall(function()
+            conn:Disconnect()
+        end)
+    end
+
+    NativeUI.Connections = {}
+end
+
+local function UIMake(className, parent, props)
+    local ok, obj = pcall(function()
+        return Instance.new(className)
+    end)
+
+    if not ok or not obj then
+        return nil
+    end
+
+    for key, value in pairs(props or {}) do
+        pcall(function()
+            obj[key] = value
+        end)
+    end
+
+    obj.Parent = parent
+    return obj
+end
+
+local function UICorner(parent, radius)
+    return UIMake("UICorner", parent, {
+        CornerRadius = UDim.new(0, radius or 6),
+    })
+end
+
+local function UIStroke(parent, color, thickness)
+    return UIMake("UIStroke", parent, {
+        Color = color or UI_COLORS.Accent,
+        Thickness = thickness or 1,
+        Transparency = 0.1,
+    })
+end
+
+local function UIGetPlayerGui()
+    local ok, gui = pcall(function()
+        return LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    end)
+
+    if ok and gui then
+        return gui
+    end
+
+    local ok2, fallback = pcall(function()
+        if type(gethui) == "function" then
+            return gethui()
+        end
+        return nil
+    end)
+
+    return ok2 and fallback or nil
+end
+
+local function UISettingValue(cfg)
+    if not cfg then
+        return ""
+    end
+
+    if cfg.Type == "toggle" then
+        return cfg.Value and "ON" or "OFF"
+    end
+
+    if cfg.Type == "slider" then
+        return tostring(math.floor((tonumber(cfg.Value) or 0) * 100 + 0.5) / 100)
+    end
+
+    return tostring(cfg.Value)
+end
+
+local function UIApplySetting(key, newValue)
+    local cfg = Settings[key]
+    if not cfg then
+        return
+    end
+
+    cfg.Value = newValue
+
+    if key == "Chams" then
+        for _, player in ipairs(GetPlayers()) do
+            pcall(function()
+                if cfg.Value then
+                    Chams.Apply(player)
+                else
+                    Chams.Remove(player)
+                end
+            end)
+        end
+
+    elseif key == "FullBright" then
+        pcall(function()
+            if cfg.Value then
+                FB.On()
+            else
+                FB.Off()
+            end
+        end)
+
+    elseif key == "FOVChanger" then
+        local camera = GetCamera()
+        if camera then
+            pcall(function()
+                camera.FieldOfView =
+                    cfg.Value and (S("CustomFOV") or 90) or 70
+            end)
+        end
+
+    elseif key == "CustomFOV" then
+        if S("FOVChanger") then
+            local camera = GetCamera()
+            if camera then
+                pcall(function()
+                    camera.FieldOfView = cfg.Value
+                end)
+            end
+        end
+
+    elseif key == "ChamStyle" and S("Chams") then
+        for _, player in ipairs(GetPlayers()) do
+            pcall(function()
+                Chams.Apply(player)
+            end)
+        end
+    end
+end
+
+local function UIRefreshButton(button, cfg)
+    if not button or not cfg then
+        return
+    end
+
+    button.Text = UISettingValue(cfg)
+
+    if cfg.Type == "toggle" then
+        button.BackgroundColor3 = cfg.Value
+            and UI_COLORS.Accent
+            or UI_COLORS.Off
+
+        button.TextColor3 = cfg.Value
+            and Color3.fromRGB(5, 12, 12)
+            or UI_COLORS.Text
+    end
+end
+
+local function UICycleDropdown(cfg)
+    if not cfg or not cfg.Options or #cfg.Options == 0 then
+        return
+    end
+
+    local current = 1
+
+    for index, value in ipairs(cfg.Options) do
+        if value == cfg.Value then
+            current = index
+            break
+        end
+    end
+
+    UIApplySetting(
+        cfg.__Key,
+        cfg.Options[(current % #cfg.Options) + 1]
+    )
+end
+
+local function UISliderValue(cfg, mouseX, absoluteX, trackWidth)
+    local minValue = cfg.Min or 0
+    local maxValue = cfg.Max or 100
+
+    if maxValue <= minValue then
+        maxValue = minValue + 1
+    end
+
+    local ratio = math.clamp(
+        (mouseX - absoluteX) / math.max(trackWidth, 1),
+        0,
+        1
+    )
+
+    local value = minValue + (maxValue - minValue) * ratio
+
+    if maxValue - minValue >= 10 then
+        value = math.floor(value + 0.5)
+    else
+        value = math.floor(value * 100 + 0.5) / 100
+    end
+
+    return value
+end
+
+local function UIGetTabs()
+    local tabs = {}
+
+    for _, cfg in pairs(Settings) do
+        if cfg.Tab and not table.find(tabs, cfg.Tab) then
+            table.insert(tabs, cfg.Tab)
+        end
+    end
+
+    table.sort(tabs)
+
+    -- Keep the original order for readability.
+    local preferred = {
+        Aimbot = 1,
+        ESP = 2,
+        Visuals = 3,
+        Movement = 4,
+        Misc = 5,
+    }
+
+    table.sort(tabs, function(a, b)
+        return (preferred[a] or 99) < (preferred[b] or 99)
+    end)
+
+    return tabs
+end
+
+local function UIGetSettings(tabName)
+    local list = {}
+
+    for key, cfg in pairs(Settings) do
+        if cfg.Tab == tabName then
+            cfg.__Key = key
+            table.insert(list, {
+                Key = key,
+                Config = cfg,
+            })
+        end
+    end
+
+    table.sort(list, function(a, b)
+        return a.Key < b.Key
+    end)
+
+    return list
+end
+
+local function UIShow(state)
+    NativeUI.Visible = state
+
+    if NativeUI.Main then
+        NativeUI.Main.Visible = state
+    end
+
+    if NativeUI.Open then
+        NativeUI.Open.Visible = not state
+    end
+end
+
+local function UIClearBody()
+    if not NativeUI.Body then
+        return
+    end
+
+    for _, child in ipairs(NativeUI.Body:GetChildren()) do
+        pcall(function()
+            child:Destroy()
+        end)
+    end
+end
+
+local function UIRenderTab(tabName)
+    NativeUI.ActiveTab = tabName
+    UIClearBody()
+
+    if not NativeUI.Body then
+        return
+    end
+
+    local entries = UIGetSettings(tabName)
+
+    for index, entry in ipairs(entries) do
+        local key = entry.Key
+        local cfg = entry.Config
+
+        local row = UIMake("Frame", NativeUI.Body, {
+            Name = "Row_" .. key,
+            BackgroundColor3 =
+                (index % 2 == 0)
+                and UI_COLORS.RowAlt
+                or UI_COLORS.Row,
+            BorderSizePixel = 0,
+            Size = UDim2.new(1, -8, 0, 42),
+        })
+
+        UICorner(row, 6)
+
+        UIMake("TextLabel", row, {
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(12, 0),
+            Size = UDim2.new(0.45, 0, 1, 0),
+            Text = key,
+            TextColor3 = UI_COLORS.Text,
+            TextSize = 12,
+            Font = Enum.Font.Gotham,
+            TextXAlignment = Enum.TextXAlignment.Left,
+        })
+
+        if cfg.Type == "toggle" then
+            local button = UIMake("TextButton", row, {
+                BackgroundColor3 =
+                    cfg.Value and UI_COLORS.Accent or UI_COLORS.Off,
+                BorderSizePixel = 0,
+                Position = UDim2.new(1, -92, 0.5, -13),
+                Size = UDim2.fromOffset(76, 26),
+                Text = UISettingValue(cfg),
+                TextColor3 =
+                    cfg.Value
+                    and Color3.fromRGB(5, 12, 12)
+                    or UI_COLORS.Text,
+                TextSize = 11,
+                Font = Enum.Font.GothamBold,
+                AutoButtonColor = true,
+            })
+
+            UICorner(button, 5)
+
+            UITrack(button.Activated:Connect(function()
+                UIApplySetting(key, not cfg.Value)
+                UIRefreshButton(button, cfg)
+            end))
+
+        elseif cfg.Type == "dropdown" then
+            local button = UIMake("TextButton", row, {
+                BackgroundColor3 = UI_COLORS.Off,
+                BorderSizePixel = 0,
+                Position = UDim2.new(1, -168, 0.5, -13),
+                Size = UDim2.fromOffset(152, 26),
+                Text = tostring(cfg.Value) .. "  ▾",
+                TextColor3 = UI_COLORS.Text,
+                TextSize = 11,
+                Font = Enum.Font.Gotham,
+                AutoButtonColor = true,
+            })
+
+            UICorner(button, 5)
+
+            UITrack(button.Activated:Connect(function()
+                UICycleDropdown(cfg)
+                button.Text = tostring(cfg.Value) .. "  ▾"
+            end))
+
+        elseif cfg.Type == "slider" then
+            local valueLabel = UIMake("TextLabel", row, {
+                BackgroundTransparency = 1,
+                Position = UDim2.new(1, -58, 0, 4),
+                Size = UDim2.fromOffset(50, 18),
+                Text = UISettingValue(cfg),
+                TextColor3 = UI_COLORS.Accent,
+                TextSize = 11,
+                Font = Enum.Font.GothamBold,
+                TextXAlignment = Enum.TextXAlignment.Right,
+            })
+
+            local track = UIMake("TextButton", row, {
+                BackgroundColor3 = UI_COLORS.Off,
+                BorderSizePixel = 0,
+                Position = UDim2.new(0.50, 0, 0.5, -3),
+                Size = UDim2.new(0.38, 0, 0, 6),
+                Text = "",
+                AutoButtonColor = false,
+            })
+
+            UICorner(track, 3)
+
+            local fill = UIMake("Frame", track, {
+                BackgroundColor3 = UI_COLORS.Accent,
+                BorderSizePixel = 0,
+                Size = UDim2.new(
+                    math.clamp(
+                        ((cfg.Value - (cfg.Min or 0)) /
+                        math.max((cfg.Max or 100) - (cfg.Min or 0), 1)),
+                        0,
+                        1
+                    ),
+                    0,
+                    1,
+                    0
+                ),
+                Position = UDim2.fromScale(0, 0),
+            })
+
+            UICorner(fill, 3)
+
+            local function SetSlider(mouseX)
+                local abs = track.AbsolutePosition.X
+                local width = track.AbsoluteSize.X
+                local value = UISliderValue(cfg, mouseX, abs, width)
+
+                UIApplySetting(key, value)
+
+                local ratio = math.clamp(
+                    (value - (cfg.Min or 0)) /
+                    math.max((cfg.Max or 100) - (cfg.Min or 0), 1),
+                    0,
+                    1
+                )
+
+                fill.Size = UDim2.new(ratio, 0, 1, 0)
+                valueLabel.Text = UISettingValue(cfg)
+            end
+
+            UITrack(track.Activated:Connect(function(input)
+                local mousePos = UserInputService:GetMouseLocation()
+                SetSlider(mousePos.X)
+            end))
+
+            UITrack(track.MouseButton1Down:Connect(function()
+                local moveConn
+                moveConn = UserInputService.InputChanged:Connect(function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseMovement then
+                        SetSlider(input.Position.X)
+                    end
+                end)
+
+                local endConn
+                endConn = UserInputService.InputEnded:Connect(function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        pcall(function() moveConn:Disconnect() end)
+                        pcall(function() endConn:Disconnect() end)
+                    end
+                end)
+
+                UITrack(moveConn)
+                UITrack(endConn)
+            end)
+        end
+    end
+
+    local layout = UIMake("UIListLayout", NativeUI.Body, {
+        Padding = UDim.new(0, 5),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    })
+
+    local padding = UIMake("UIPadding", NativeUI.Body, {
+        PaddingLeft = UDim.new(0, 2),
+        PaddingRight = UDim.new(0, 2),
+        PaddingTop = UDim.new(0, 2),
+        PaddingBottom = UDim.new(0, 6),
+    })
+
+    -- Keep references alive in the hierarchy; explicit locals are not needed.
+    return layout, padding
+end
+
+local function UIRebuildTabs()
+    if not NativeUI.TabBar then
+        return
+    end
+
+    for _, child in ipairs(NativeUI.TabBar:GetChildren()) do
+        if not child:IsA("UIListLayout") then
+            pcall(function()
+                child:Destroy()
+            end)
+        end
+    end
+
+    local tabs = UIGetTabs()
+
+    for _, tabName in ipairs(tabs) do
+        local button = UIMake("TextButton", NativeUI.TabBar, {
+            BackgroundColor3 =
+                tabName == NativeUI.ActiveTab
+                and UI_COLORS.RowAlt
+                or UI_COLORS.Header,
+            BorderSizePixel = 0,
+            Size = UDim2.fromOffset(74, 28),
+            Text = tabName,
+            TextColor3 =
+                tabName == NativeUI.ActiveTab
+                and UI_COLORS.Accent
+                or UI_COLORS.Muted,
+            TextSize = 10,
+            Font = Enum.Font.GothamBold,
+            AutoButtonColor = true,
+        })
+
+        UICorner(button, 5)
+
+        UITrack(button.Activated:Connect(function()
+            NativeUI.ActiveTab = tabName
+            UIRenderTab(tabName)
+            UIRebuildTabs()
+        end))
+    end
+
+    UIMake("UIListLayout", NativeUI.TabBar, {
+        FillDirection = Enum.FillDirection.Horizontal,
+        Padding = UDim.new(0, 4),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    })
+end
+
+local function UIDestroy()
+    UIDisconnect()
+
+    if NativeUI.Gui then
+        pcall(function()
+            NativeUI.Gui:Destroy()
+        end)
+    end
+
+    NativeUI.Gui = nil
+    NativeUI.Main = nil
+    NativeUI.Open = nil
+    NativeUI.Body = nil
+    NativeUI.TabBar = nil
+end
+
+local function UIBuild()
+    UIDestroy()
+
+    -- The previous Drawing UI can remain alive and steal visual space.
+    pcall(function()
+        if Menu then
+            Menu.Vis = false
+            Menu.ClearDraw()
+        end
+    end)
+
+    pcall(function()
+        if Overlay then
+            Overlay.Clear()
+        end
+    end)
+
+    local parent = UIGetPlayerGui()
+
+    if not parent then
+        warn("[0 HUB V9.2] PlayerGui unavailable; UI was not created.")
+        return false
+    end
+
+    local gui = UIMake("ScreenGui", parent, {
+        Name = "ZeroHubV92",
+        ResetOnSpawn = false,
+        IgnoreGuiInset = false,
+        DisplayOrder = 999999,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        Enabled = true,
+    })
+
+    if not gui then
+        return false
+    end
+
+    NativeUI.Gui = gui
+
+    local main = UIMake("Frame", gui, {
+        Name = "Main",
+        Position = UDim2.new(0, 80, 0, 80),
+        Size = UDim2.fromOffset(560, 500),
+        BackgroundColor3 = UI_COLORS.Background,
+        BorderSizePixel = 0,
+        Active = true,
+        Visible = true,
+    })
+
+    if not main then
+        UIDestroy()
+        return false
+    end
+
+    NativeUI.Main = main
+    UICorner(main, 9)
+    UIStroke(main, UI_COLORS.Accent, 1)
+
+    local header = UIMake("Frame", main, {
+        Name = "Header",
+        Position = UDim2.fromOffset(0, 0),
+        Size = UDim2.new(1, 0, 0, 42),
+        BackgroundColor3 = UI_COLORS.Header,
+        BorderSizePixel = 0,
+        Active = true,
+    })
+
+    UICorner(header, 9)
+
+    UIMake("TextLabel", header, {
+        BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(14, 0),
+        Size = UDim2.new(1, -110, 1, 0),
+        Text = "0 HUB v9.2",
+        TextColor3 = UI_COLORS.Text,
+        TextSize = 15,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    })
+
+    UIMake("TextLabel", header, {
+        BackgroundTransparency = 1,
+        Position = UDim2.new(1, -180, 0, 0),
+        Size = UDim2.fromOffset(75, 42),
+        Text = "INSERT",
+        TextColor3 = UI_COLORS.Muted,
+        TextSize = 9,
+        Font = Enum.Font.Gotham,
+        TextXAlignment = Enum.TextXAlignment.Right,
+    })
+
+    local close = UIMake("TextButton", header, {
+        BackgroundColor3 = UI_COLORS.Off,
+        BorderSizePixel = 0,
+        Position = UDim2.new(1, -42, 0.5, -13),
+        Size = UDim2.fromOffset(30, 26),
+        Text = "×",
+        TextColor3 = UI_COLORS.Text,
+        TextSize = 18,
+        Font = Enum.Font.GothamBold,
+        AutoButtonColor = true,
+    })
+
+    UICorner(close, 5)
+
+    UITrack(close.Activated:Connect(function()
+        UIShow(false)
+    end))
+
+    -- Drag support.
+    UITrack(header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            NativeUI.Dragging = true
+            NativeUI.DragStart = input.Position
+            NativeUI.MainStart = main.Position
+        end
+    end))
+
+    UITrack(UserInputService.InputChanged:Connect(function(input)
+        if not NativeUI.Dragging then
+            return
+        end
+
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement then
+            return
+        end
+
+        if not NativeUI.DragStart or not NativeUI.MainStart then
+            return
+        end
+
+        local delta = input.Position - NativeUI.DragStart
+
+        main.Position = UDim2.new(
+            NativeUI.MainStart.X.Scale,
+            NativeUI.MainStart.X.Offset + delta.X,
+            NativeUI.MainStart.Y.Scale,
+            NativeUI.MainStart.Y.Offset + delta.Y
+        )
+    end))
+
+    UITrack(UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            NativeUI.Dragging = false
+        end
+    end))
+
+    local tabs = UIMake("Frame", main, {
+        Position = UDim2.fromOffset(8, 48),
+        Size = UDim2.new(1, -16, 0, 30),
+        BackgroundTransparency = 1,
+    })
+
+    NativeUI.TabBar = tabs
+
+    local body = UIMake("ScrollingFrame", main, {
+        Position = UDim2.fromOffset(8, 84),
+        Size = UDim2.new(1, -16, 1, -92),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 4,
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        Active = true,
+    })
+
+    NativeUI.Body = body
+
+    -- Reopen button. It is a real TextButton now; no Drawing hit testing.
+    local open = UIMake("TextButton", gui, {
+        Name = "Reopen",
+        Position = UDim2.fromOffset(14, 14),
+        Size = UDim2.fromOffset(44, 44),
+        BackgroundColor3 = Color3.fromRGB(12, 12, 18),
+        BorderSizePixel = 0,
+        Text = "☰",
+        TextColor3 = UI_COLORS.Accent,
+        TextSize = 21,
+        Font = Enum.Font.GothamBold,
+        AutoButtonColor = true,
+        Visible = false,
+        Active = true,
+        ZIndex = 50,
+    })
+
+    NativeUI.Open = open
+
+    UICorner(open, 7)
+    UIStroke(open, UI_COLORS.Accent, 1)
+
+    UITrack(open.Activated:Connect(function()
+        UIShow(true)
+    end))
+
+    UIRebuildTabs()
+    UIRenderTab("Aimbot")
+    UIShow(true)
+
+    return true
+end
+
+local NativeUIReady = false
+
+task.defer(function()
+    local ok, result = xpcall(UIBuild, debug.traceback)
+
+    NativeUIReady = ok and result == true
+
+    if NativeUIReady then
+        print("[0 HUB V9.2] Native ScreenGui UI ready.")
+    else
+        warn("[0 HUB V9.2] Native UI build failed:", tostring(result))
+    end
+end)
+
+-- ========================================================
+-- // V9.2 — GLOBAL UI HOTKEY
+-- // The hotkey only controls OUR ScreenGui and never depends
+-- // on Menu.Tick(), Drawing, or game-owned character modules.
+-- ========================================================
+
+UITrack(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then
+        return
+    end
+
+    local key = input.KeyCode
+
+    if key == Enum.KeyCode.Insert
+        or key == Enum.KeyCode.F4
+        or key == Enum.KeyCode.Home then
+
+        if NativeUIReady then
+            UIShow(not NativeUI.Visible)
+        end
+    end
+end))
+
+-- ========================================================
+-- // V9.2 — KEEP UI ABOVE GAME UI AFTER RESPAWN
+-- ========================================================
+
+UITrack(LocalPlayer.CharacterAdded:Connect(function()
+    task.defer(function()
+        if NativeUI.Gui then
+            pcall(function()
+                NativeUI.Gui.ResetOnSpawn = false
+                NativeUI.Gui.Enabled = true
+            end)
+        end
+    end)
+end))
+
+print("[0 HUB V9.2] UI repair layer installed.")
