@@ -1,119 +1,145 @@
 -- ========================================================
--- BIBILABU HUB v6.1 - RIVALS FPS EDITION
--- NIL-HARDENED | CAMERA LIVE-FETCH | EXECUTOR COMPAT
+-- BIBILABU HUB v7.0 - RIVALS FPS EDITION
+-- ZERO-NIL | PREDICTIVE ENGINE | THREAD-SAFE | EXECUTOR HARDENED
 -- ========================================================
 
 -- // SERVICES
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local TweenService     = game:GetService("TweenService")
 local Lighting         = game:GetService("Lighting")
 local Workspace        = workspace
 local LocalPlayer      = Players.LocalPlayer
 
--- // CAMERA: always fetched live — never cached at load time
 local function GetCamera()
     return Workspace.CurrentCamera
 end
 
 -- ========================================================
--- // RUNTIME GUARD
+-- // RUNTIME GUARD v2 — thread-aware, death-locked
 -- ========================================================
 local Runtime = {
-    Version   = "6.1.0",
-    Loaded    = false,
-    Errors    = 0,
-    MaxErrors = 30,
-    Conns     = {},
-    Dead      = false,
+    Version    = "7.0.0",
+    Loaded     = false,
+    Errors     = 0,
+    MaxErrors  = 50,
+    Conns      = {},
+    Dead       = false,
+    StartTime  = os.clock(),
+    FrameCount = 0,
 }
 
 local function SafeCall(fn, ...)
     if Runtime.Dead then return end
-    local ok, err = pcall(fn, ...)
+    local args = {...}
+    local ok, err = xpcall(function() return fn(table.unpack(args)) end, function(e)
+        return e .. "\n" .. (debug and debug.traceback and debug.traceback("",2) or "")
+    end)
     if not ok then
-        Runtime.Errors = Runtime.Errors + 1
-        warn("[BIBILABU v6.1] err#" .. Runtime.Errors .. ": " .. tostring(err))
+        Runtime.Errors += 1
+        warn(("[BIBILABU v7.0] ERR #%d → %s"):format(Runtime.Errors, tostring(err)))
         if Runtime.Errors >= Runtime.MaxErrors then
-            warn("[BIBILABU v6.1] too many errors — killing script")
+            warn("[BIBILABU v7.0] error cap hit — flatlined")
             Runtime.Dead = true
         end
     end
 end
 
 local function Track(conn)
-    table.insert(Runtime.Conns, conn)
+    if conn then table.insert(Runtime.Conns, conn) end
     return conn
 end
 
+local function Cleanup()
+    Runtime.Dead = true
+    for _, c in ipairs(Runtime.Conns) do
+        pcall(function() c:Disconnect() end)
+    end
+    Runtime.Conns = {}
+end
+
 -- ========================================================
--- // SETTINGS
+-- // SETTINGS — typed, bounded, serializable
 -- ========================================================
 local Settings = {
     -- Aimbot
-    Aimbot           = { Value=false,   Type="toggle",   Tab="Aimbot" },
-    SilentAim        = { Value=false,   Type="toggle",   Tab="Aimbot" },
-    AimbotFOV        = { Value=150,     Type="slider",   Tab="Aimbot",   Min=20,   Max=500 },
-    ShowFOV          = { Value=true,    Type="toggle",   Tab="Aimbot" },
-    TargetPart       = { Value="Head",  Type="dropdown", Tab="Aimbot",   Options={"Head","UpperTorso","HumanoidRootPart"} },
-    Prediction       = { Value=false,   Type="toggle",   Tab="Aimbot" },
-    TargetLock       = { Value=false,   Type="toggle",   Tab="Aimbot" },
-    AutoTargetSwitch = { Value=true,    Type="toggle",   Tab="Aimbot" },
-    AimbotSmooth     = { Value=5,       Type="slider",   Tab="Aimbot",   Min=1,    Max=50 },
-    TriggerBot       = { Value=false,   Type="toggle",   Tab="Aimbot" },
-    AutoFire         = { Value=false,   Type="toggle",   Tab="Aimbot" },
-    AutoFireRate     = { Value=0.08,    Type="slider",   Tab="Aimbot",   Min=0.01, Max=0.5 },
+    Aimbot           = { Value=false,    Type="toggle",   Tab="Aimbot" },
+    SilentAim        = { Value=false,    Type="toggle",   Tab="Aimbot" },
+    AimbotFOV        = { Value=150,      Type="slider",   Tab="Aimbot",    Min=10,   Max=600 },
+    ShowFOV          = { Value=true,     Type="toggle",   Tab="Aimbot" },
+    TargetPart       = { Value="Head",   Type="dropdown", Tab="Aimbot",    Options={"Head","UpperTorso","HumanoidRootPart"} },
+    Prediction       = { Value=false,    Type="toggle",   Tab="Aimbot" },
+    PredictionStr    = { Value=0.07,     Type="slider",   Tab="Aimbot",    Min=0.01, Max=0.3 },
+    TargetLock       = { Value=false,    Type="toggle",   Tab="Aimbot" },
+    AutoTargetSwitch = { Value=true,     Type="toggle",   Tab="Aimbot" },
+    AimbotSmooth     = { Value=5,        Type="slider",   Tab="Aimbot",    Min=1,    Max=100 },
+    AimbotKey        = { Value="None",   Type="dropdown", Tab="Aimbot",    Options={"None","RightMouseButton","E","Q"} },
+    TriggerBot       = { Value=false,    Type="toggle",   Tab="Aimbot" },
+    TriggerDelay     = { Value=0.04,     Type="slider",   Tab="Aimbot",    Min=0,    Max=0.25 },
+    AutoFire         = { Value=false,    Type="toggle",   Tab="Aimbot" },
+    AutoFireRate     = { Value=0.08,     Type="slider",   Tab="Aimbot",    Min=0.01, Max=0.5 },
     -- ESP
-    ESP              = { Value=false,   Type="toggle",   Tab="ESP" },
-    ESPBoxes         = { Value=true,    Type="toggle",   Tab="ESP" },
-    ESPNames         = { Value=true,    Type="toggle",   Tab="ESP" },
-    ESPDistance      = { Value=true,    Type="toggle",   Tab="ESP" },
-    ESPHealth        = { Value=true,    Type="toggle",   Tab="ESP" },
-    ESPSkeleton      = { Value=false,   Type="toggle",   Tab="ESP" },
-    ESPTracers       = { Value=false,   Type="toggle",   Tab="ESP" },
-    ESPTracerOrigin  = { Value="Bottom",Type="dropdown", Tab="ESP",      Options={"Bottom","Center","Top"} },
-    ESPMaxDist       = { Value=500,     Type="slider",   Tab="ESP",      Min=50,   Max=2000 },
-    Chams            = { Value=false,   Type="toggle",   Tab="ESP" },
+    ESP              = { Value=false,    Type="toggle",   Tab="ESP" },
+    ESPBoxes         = { Value=true,     Type="toggle",   Tab="ESP" },
+    ESPBoxStyle      = { Value="Corner", Type="dropdown", Tab="ESP",       Options={"Corner","Full","Fill"} },
+    ESPNames         = { Value=true,     Type="toggle",   Tab="ESP" },
+    ESPDistance      = { Value=true,     Type="toggle",   Tab="ESP" },
+    ESPHealth        = { Value=true,     Type="toggle",   Tab="ESP" },
+    ESPSkeleton      = { Value=false,    Type="toggle",   Tab="ESP" },
+    ESPTracers       = { Value=false,    Type="toggle",   Tab="ESP" },
+    ESPTracerOrigin  = { Value="Bottom", Type="dropdown", Tab="ESP",       Options={"Bottom","Center","Top"} },
+    ESPMaxDist       = { Value=500,      Type="slider",   Tab="ESP",       Min=50,   Max=2000 },
+    ESPTeamColor     = { Value=false,    Type="toggle",   Tab="ESP" },
+    Chams            = { Value=false,    Type="toggle",   Tab="ESP" },
+    ChamStyle        = { Value="Neon",   Type="dropdown", Tab="ESP",       Options={"Neon","Glass","Solid"} },
     -- Visuals
-    FullBright       = { Value=false,   Type="toggle",   Tab="Visuals" },
+    FullBright       = { Value=false,    Type="toggle",   Tab="Visuals" },
+    CrosshairMode    = { Value="Off",    Type="dropdown", Tab="Visuals",   Options={"Off","Dot","Cross","Circle"} },
+    FOVChanger       = { Value=false,    Type="toggle",   Tab="Visuals" },
+    CustomFOV        = { Value=90,       Type="slider",   Tab="Visuals",   Min=30,   Max=120 },
     -- Movement
-    Fly              = { Value=false,   Type="toggle",   Tab="Movement" },
-    FlySpeed         = { Value=50,      Type="slider",   Tab="Movement", Min=10,   Max=300 },
-    Noclip           = { Value=false,   Type="toggle",   Tab="Movement" },
-    SpeedHack        = { Value=false,   Type="toggle",   Tab="Movement" },
-    SpeedMult        = { Value=1.5,     Type="slider",   Tab="Movement", Min=1,    Max=10 },
-    InfiniteJump     = { Value=false,   Type="toggle",   Tab="Movement" },
+    Fly              = { Value=false,    Type="toggle",   Tab="Movement" },
+    FlySpeed         = { Value=50,       Type="slider",   Tab="Movement",  Min=10,   Max=500 },
+    Noclip           = { Value=false,    Type="toggle",   Tab="Movement" },
+    SpeedHack        = { Value=false,    Type="toggle",   Tab="Movement" },
+    SpeedMult        = { Value=1.5,      Type="slider",   Tab="Movement",  Min=1,    Max=10 },
+    InfiniteJump     = { Value=false,    Type="toggle",   Tab="Movement" },
+    LowGravity       = { Value=false,    Type="toggle",   Tab="Movement" },
     -- Misc
-    AntiBan          = { Value=true,    Type="toggle",   Tab="Misc" },
-    Notifications    = { Value=true,    Type="toggle",   Tab="Misc" },
+    AntiBan          = { Value=true,     Type="toggle",   Tab="Misc" },
+    Notifications    = { Value=true,     Type="toggle",   Tab="Misc" },
+    WatermarkShow    = { Value=true,     Type="toggle",   Tab="Misc" },
+    PanicKey         = { Value="Delete", Type="dropdown", Tab="Misc",      Options={"Delete","End","F9"} },
+    MenuKey          = { Value="Insert", Type="dropdown", Tab="Misc",      Options={"Insert","F4","Home"} },
 }
 
-local function S(k)   return Settings[k] and Settings[k].Value end
+local function S(k)    return Settings[k] and Settings[k].Value end
 local function Set(k,v) if Settings[k] then Settings[k].Value = v end end
 
 -- ========================================================
--- // UTILITY — every single access nil-guarded
+-- // UTILITY — zero-nil contract on every path
 -- ========================================================
 local Util = {}
 
 function Util.Char(p)
-    if not p then return nil end
+    if typeof(p) ~= "Instance" then return nil end
     local ok, c = pcall(function() return p.Character end)
-    return ok and c or nil
+    return (ok and typeof(c) == "Instance") and c or nil
 end
 
 function Util.Hum(p)
     local c = Util.Char(p)
     if not c then return nil end
     local ok, h = pcall(function() return c:FindFirstChildOfClass("Humanoid") end)
-    return ok and h or nil
+    return (ok and h) and h or nil
 end
 
 function Util.Root(p)
     local c = Util.Char(p)
     if not c then return nil end
     local ok, r = pcall(function() return c:FindFirstChild("HumanoidRootPart") end)
-    return ok and r or nil
+    return (ok and r) and r or nil
 end
 
 function Util.Part(p, name)
@@ -122,29 +148,26 @@ function Util.Part(p, name)
     local ok, part = pcall(function()
         return c:FindFirstChild(name) or c:FindFirstChild("HumanoidRootPart")
     end)
-    return ok and part or nil
+    return (ok and part) and part or nil
 end
 
 function Util.Alive(p)
     local h = Util.Hum(p)
     if not h then return false end
-    local ok, alive = pcall(function() return h.Health > 0 end)
-    return ok and alive or false
+    local ok, hp = pcall(function() return h.Health end)
+    return ok and (hp or 0) > 0
 end
 
 function Util.Dist(a, b)
     if not a or not b then return math.huge end
     local ok, d = pcall(function() return (a - b).Magnitude end)
-    return ok and d or math.huge
+    return (ok and d) or math.huge
 end
 
--- Live camera fetch with nil guard
 function Util.W2S(pos)
     local cam = GetCamera()
     if not cam then return Vector2.zero, false, 0 end
-    local ok, res = pcall(function()
-        return cam:WorldToViewportPoint(pos)
-    end)
+    local ok, res = pcall(function() return cam:WorldToViewportPoint(pos) end)
     if not ok or not res then return Vector2.zero, false, 0 end
     return Vector2.new(res.X, res.Y), res.Z > 0, res.Z
 end
@@ -157,20 +180,192 @@ function Util.LerpC(c1, c2, t)
     )
 end
 
-function Util.HPColor(hp, max)
-    local t = math.clamp(hp / math.max(max, 1), 0, 1)
+function Util.HPColor(hp, maxHp)
+    local t = math.clamp(hp / math.max(maxHp, 1), 0, 1)
     return Util.LerpC(Color3.fromRGB(220,30,30), Color3.fromRGB(30,220,80), t)
 end
 
+function Util.TeamColor(p)
+    local ok, col = pcall(function()
+        return p.TeamColor and Color3.fromBrickColor(p.TeamColor) or Color3.fromRGB(255,60,60)
+    end)
+    return ok and col or Color3.fromRGB(255,60,60)
+end
+
+function Util.KeyDown(name)
+    if name == "None" then return true end -- no key gating = always active
+    local ok, down = pcall(function()
+        local kc = Enum.KeyCode[name]
+        if kc then return UserInputService:IsKeyDown(kc) end
+        local mb = Enum.UserInputType[name]
+        if mb then return UserInputService:IsMouseButtonPressed(mb) end
+        return false
+    end)
+    return ok and down or false
+end
+
 -- ========================================================
--- // TARGET SYSTEM
+-- // VELOCITY HISTORY → linear regression prediction
 -- ========================================================
-local Target = { Current=nil, LastSwitch=0, Cooldown=0.25 }
+local VelHistory = {}
+local VEL_SAMPLES = 8
+
+local function RecordVel(uid, pos, dt)
+    if dt <= 0 then return end
+    VelHistory[uid] = VelHistory[uid] or {}
+    local h = VelHistory[uid]
+    table.insert(h, { pos = pos, t = os.clock() })
+    while #h > VEL_SAMPLES do table.remove(h, 1) end
+end
+
+local function PredictPos(target)
+    if not S("Prediction") then return nil end
+    local part = Util.Part(target, S("TargetPart") or "Head")
+    local lr   = Util.Root(LocalPlayer)
+    if not part or not lr then return nil end
+
+    local ok, partPos = pcall(function() return part.Position end)
+    local ok2, lrPos  = pcall(function() return lr.Position end)
+    if not ok or not ok2 or not partPos or not lrPos then return nil end
+
+    local uid = target.UserId
+    local h   = VelHistory[uid]
+    if not h or #h < 2 then return partPos end
+
+    -- weighted average velocity (newer = higher weight)
+    local vx, vy, vz, wSum = 0, 0, 0, 0
+    for i = 2, #h do
+        local dt = h[i].t - h[i-1].t
+        if dt > 0 then
+            local dv = h[i].pos - h[i-1].pos
+            local w  = i / #h
+            vx += (dv.X/dt)*w; vy += (dv.Y/dt)*w; vz += (dv.Z/dt)*w
+            wSum += w
+        end
+    end
+    if wSum <= 0 then return partPos end
+    local vel = Vector3.new(vx/wSum, vy/wSum, vz/wSum)
+
+    local dist    = Util.Dist(partPos, lrPos)
+    local tFlight = dist / 1500  -- tune per-game bullet speed
+    local str     = S("PredictionStr") or 0.07
+    return partPos + vel * (tFlight * (str * 10))
+end
+
+-- ========================================================
+-- // FOV CIRCLE — smooth radius transition
+-- ========================================================
+local FOVCircle = nil
+local FOVTarget = 0
+local FOVCurrent= 0
+
+if Drawing then
+    pcall(function()
+        FOVCircle = Drawing.new("Circle")
+        FOVCircle.Thickness    = 1.5
+        FOVCircle.Color        = Color3.fromRGB(0,215,155)
+        FOVCircle.Filled       = false
+        FOVCircle.Transparency = 0.8
+        FOVCircle.Visible      = false
+        FOVCircle.NumSides     = 64
+    end)
+end
+
+local function UpdateFOV(dt)
+    if not FOVCircle then return end
+    FOVTarget = S("AimbotFOV") or 150
+    FOVCurrent = FOVCurrent + (FOVTarget - FOVCurrent) * math.min(dt * 12, 1)
+    local active = S("ShowFOV") and (S("Aimbot") or S("SilentAim"))
+    if active then
+        local ok, mp = pcall(function() return UserInputService:GetMouseLocation() end)
+        if ok and mp then
+            FOVCircle.Position = mp
+            FOVCircle.Radius   = FOVCurrent
+            FOVCircle.Visible  = true
+        end
+    else
+        FOVCircle.Visible = false
+    end
+end
+
+-- ========================================================
+-- // HOOK SYSTEM — stores original __index, no rawget fallback crash
+-- ========================================================
+local Hooks = { Done = false, OrigIndex = nil }
+
+function Hooks.Install()
+    if Hooks.Done then return end
+    local banPats = {"ban","kick","detect","cheat","verify","admin","anticheat","report","flag","exploit","hack"}
+
+    -- Anti-ban namecall
+    pcall(function()
+        if not (getrawmetatable and hookmetamethod and newcclosure and checkcaller and getnamecallmethod) then return end
+        local mt    = getrawmetatable(game)
+        local oldNC = mt.__namecall
+        setreadonly(mt, false)
+        mt.__namecall = newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            if not checkcaller() and S("AntiBan") then
+                if method == "FireServer" or method == "InvokeServer" then
+                    local nm = ""
+                    pcall(function() nm = tostring(rawget(self,"Name") or self.Name or ""):lower() end)
+                    for _, pat in ipairs(banPats) do
+                        if nm:find(pat) then return end
+                    end
+                end
+            end
+            return oldNC(self, ...)
+        end)
+        setreadonly(mt, true)
+    end)
+
+    -- Silent aim — stores original, no naked rawget fallback
+    pcall(function()
+        if not (hookmetamethod and checkcaller) then return end
+        local mt = getrawmetatable(game)
+        -- !! FIX for v6.1 crash: capture __index BEFORE hooking !!
+        local originalIndex = mt.__index
+        Hooks.OrigIndex = originalIndex
+        setreadonly(mt, false)
+        mt.__index = newcclosure(function(self, key)
+            if not checkcaller() and S("SilentAim") then
+                if key == "Hit" or key == "CFrame" then
+                    local t = Target and Target.Get and Target.Get()
+                    if t then
+                        local part = Util.Part(t, S("TargetPart") or "Head")
+                        if part then
+                            local ok, pos = pcall(function() return part.Position end)
+                            if ok and pos then
+                                local pred = PredictPos(t)
+                                return CFrame.new(pred or pos)
+                            end
+                        end
+                    end
+                end
+            end
+            -- safe fallthrough — use stored original, not rawget
+            if typeof(originalIndex) == "function" then
+                return originalIndex(self, key)
+            else
+                return rawget(self, key)
+            end
+        end)
+        setreadonly(mt, true)
+    end)
+
+    Hooks.Done = true
+end
+
+-- ========================================================
+-- // TARGET SYSTEM — FOV-weighted + team filter
+-- ========================================================
+local Target = { Current=nil, LastSwitch=0, Cooldown=0.2 }
 
 function Target.Mouse()
-    local best, bDist = nil, S("AimbotFOV") or 150
-    local ok, mouse = pcall(function() return UserInputService:GetMouseLocation() end)
+    local ok, mp = pcall(function() return UserInputService:GetMouseLocation() end)
     if not ok then return nil end
+    local fov = S("AimbotFOV") or 150
+    local best, bDist = nil, fov
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and Util.Alive(p) then
             local part = Util.Part(p, S("TargetPart") or "Head")
@@ -179,7 +374,7 @@ function Target.Mouse()
                 if ok2 and pos then
                     local sp, vis = Util.W2S(pos)
                     if vis then
-                        local d = (sp - mouse).Magnitude
+                        local d = (sp - mp).Magnitude
                         if d < bDist then bDist=d; best=p end
                     end
                 end
@@ -190,17 +385,17 @@ function Target.Mouse()
 end
 
 function Target.Near()
-    local best, bDist = nil, math.huge
     local lr = Util.Root(LocalPlayer)
     if not lr then return nil end
-    local lOk, lPos = pcall(function() return lr.Position end)
-    if not lOk then return nil end
+    local ok, lPos = pcall(function() return lr.Position end)
+    if not ok or not lPos then return nil end
+    local best, bDist = nil, math.huge
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and Util.Alive(p) then
             local r = Util.Root(p)
             if r then
-                local rOk, rPos = pcall(function() return r.Position end)
-                if rOk and rPos then
+                local ok2, rPos = pcall(function() return r.Position end)
+                if ok2 and rPos then
                     local d = Util.Dist(rPos, lPos)
                     if d < bDist then bDist=d; best=p end
                 end
@@ -224,123 +419,15 @@ function Target.Get()
     return t
 end
 
-function Target.Clear()
-    Target.Current=nil; Target.LastSwitch=0
-end
+function Target.Clear() Target.Current=nil; Target.LastSwitch=0 end
 
 -- ========================================================
--- // PREDICTION
--- ========================================================
-local function PredictPos(target)
-    if not S("Prediction") then return nil end
-    local h    = Util.Hum(target)
-    local part = Util.Part(target, S("TargetPart") or "Head")
-    local lr   = Util.Root(LocalPlayer)
-    if not h or not part or not lr then return nil end
-    local ok, res = pcall(function()
-        local vel  = h.MoveDirection * h.WalkSpeed
-        local dist = Util.Dist(part.Position, lr.Position)
-        return part.Position + vel * (dist / 1500)
-    end)
-    return ok and res or nil
-end
-
--- ========================================================
--- // FOV CIRCLE
--- ========================================================
-local FOVCircle = nil
-if Drawing then
-    pcall(function()
-        FOVCircle = Drawing.new("Circle")
-        FOVCircle.Thickness    = 1.5
-        FOVCircle.Color        = Color3.fromRGB(0,215,155)
-        FOVCircle.Filled       = false
-        FOVCircle.Transparency = 0.85
-        FOVCircle.Visible      = false
-    end)
-end
-
-local function UpdateFOV()
-    if not FOVCircle then return end
-    local active = S("ShowFOV") and (S("Aimbot") or S("SilentAim"))
-    if active then
-        local ok, mp = pcall(function() return UserInputService:GetMouseLocation() end)
-        if ok and mp then
-            FOVCircle.Position = mp
-            FOVCircle.Radius   = S("AimbotFOV") or 150
-            FOVCircle.Visible  = true
-        end
-    else
-        FOVCircle.Visible = false
-    end
-end
-
--- ========================================================
--- // HOOK SYSTEM
--- ========================================================
-local Hooks = { Done=false }
-
-function Hooks.Install()
-    if Hooks.Done then return end
-    local banPats = {"ban","kick","detect","cheat","verify","admin","anticheat","report","flag"}
-
-    -- Anti-ban namecall filter
-    pcall(function()
-        if not (getrawmetatable and hookmetamethod and newcclosure and checkcaller and getnamecallmethod) then return end
-        local mt    = getrawmetatable(game)
-        local oldNC = mt.__namecall
-        setreadonly(mt, false)
-        mt.__namecall = newcclosure(function(self, ...)
-            local method = getnamecallmethod()
-            if not checkcaller() and S("AntiBan") then
-                if method == "FireServer" or method == "InvokeServer" then
-                    local nm = ""
-                    pcall(function() nm = tostring(self.Name or ""):lower() end)
-                    for _, pat in ipairs(banPats) do
-                        if nm:find(pat) then return nil end
-                    end
-                end
-            end
-            return oldNC(self, ...)
-        end)
-        setreadonly(mt, true)
-    end)
-
-    -- Silent aim __index hook
-    pcall(function()
-        if not hookmetamethod then return end
-        hookmetamethod(game, "__index", function(obj, key)
-            -- we can't call oldIndex here safely without storing it,
-            -- so we skip and let the executor's default handle non-silent paths
-            if not (checkcaller and checkcaller()) and S("SilentAim") then
-                if key == "Hit" or key == "CFrame" then
-                    local t = Target.Get()
-                    if t then
-                        local part = Util.Part(t, S("TargetPart") or "Head")
-                        if part then
-                            local ok, pos = pcall(function() return part.Position end)
-                            if ok and pos then
-                                local pred = PredictPos(t)
-                                return CFrame.new(pred or pos)
-                            end
-                        end
-                    end
-                end
-            end
-            -- fallthrough to real value
-            return rawget(obj, key)
-        end)
-    end)
-
-    Hooks.Done = true
-end
-
--- ========================================================
--- // AIMBOT
+-- // AIMBOT — smoothed, key-gated, predict-aware
 -- ========================================================
 local Aimbot = {}
 function Aimbot.Update()
     if not S("Aimbot") then return end
+    if not Util.KeyDown(S("AimbotKey") or "None") then return end
     local cam = GetCamera()
     if not cam then return end
     local t = Target.Get()
@@ -348,8 +435,10 @@ function Aimbot.Update()
     local part = Util.Part(t, S("TargetPart") or "Head")
     if not part then return end
     pcall(function()
-        local pos   = PredictPos(t) or part.Position
-        local alpha = math.clamp((S("AimbotSmooth") or 5) / 100, 0.01, 1)
+        local ok, partPos = pcall(function() return part.Position end)
+        if not ok or not partPos then return end
+        local pos   = PredictPos(t) or partPos
+        local alpha = math.clamp((S("AimbotSmooth") or 5) / 100, 0.005, 1)
         cam.CFrame  = cam.CFrame:Lerp(CFrame.lookAt(cam.CFrame.Position, pos), alpha)
     end)
 end
@@ -357,34 +446,38 @@ end
 -- ========================================================
 -- // TRIGGERBOT / AUTOFIRE
 -- ========================================================
-local TrigBot = { LastFire=0, LastAuto=0 }
+local TrigBot = { LastFire=0, LastAuto=0, Pending=false }
 
 function TrigBot.Fire()
     pcall(function()
         local vim = getgenv and getgenv().VirtualInputManager
         if vim then
             vim:SendMouseButtonEvent(0,0,0,true,nil,0)
-            task.wait(0.04)
-            vim:SendMouseButtonEvent(0,0,0,false,nil,0)
+            task.delay(0.04, function()
+                pcall(function() vim:SendMouseButtonEvent(0,0,0,false,nil,0) end)
+            end)
         end
     end)
 end
 
 function TrigBot.Update()
     local now = os.clock()
-    if S("TriggerBot") and (now - TrigBot.LastFire) >= 0.1 then
-        local t = Target.Mouse()
-        if t then
-            local part = Util.Part(t, S("TargetPart") or "Head")
-            if part then
-                local ok, pos = pcall(function() return part.Position end)
-                if ok and pos then
-                    local sp, vis = Util.W2S(pos)
-                    if vis then
-                        local ok2, mp = pcall(function() return UserInputService:GetMouseLocation() end)
-                        if ok2 and mp and (sp - mp).Magnitude < (S("AimbotFOV") or 150) * 0.18 then
-                            TrigBot.LastFire = now
-                            TrigBot.Fire()
+    if S("TriggerBot") then
+        local delay = S("TriggerDelay") or 0.04
+        if (now - TrigBot.LastFire) >= (0.1 + delay) then
+            local t = Target.Mouse()
+            if t then
+                local part = Util.Part(t, S("TargetPart") or "Head")
+                if part then
+                    local ok, pos = pcall(function() return part.Position end)
+                    if ok and pos then
+                        local sp, vis = Util.W2S(pos)
+                        if vis then
+                            local ok2, mp = pcall(function() return UserInputService:GetMouseLocation() end)
+                            if ok2 and mp and (sp - mp).Magnitude < (S("AimbotFOV") or 150) * 0.15 then
+                                TrigBot.LastFire = now
+                                task.delay(delay, TrigBot.Fire)
+                            end
                         end
                     end
                 end
@@ -398,122 +491,140 @@ function TrigBot.Update()
 end
 
 -- ========================================================
--- // ESP
+-- // CROSSHAIR
+-- ========================================================
+local XHair = { Draws={} }
+function XHair.Clear()
+    for _, d in ipairs(XHair.Draws) do pcall(function() d:Remove() end) end
+    XHair.Draws = {}
+end
+function XHair.Tick()
+    XHair.Clear()
+    if not Drawing then return end
+    local mode = S("CrosshairMode") or "Off"
+    if mode == "Off" then return end
+    local cam = GetCamera()
+    if not cam then return end
+    local ok, vp = pcall(function() return cam.ViewportSize end)
+    if not ok or not vp then return end
+    local cx, cy = vp.X/2, vp.Y/2
+    local col = Color3.fromRGB(0,215,155)
+    local function L(x1,y1,x2,y2)
+        if not Drawing then return end
+        local ln = Drawing.new("Line")
+        ln.From=Vector2.new(x1,y1); ln.To=Vector2.new(x2,y2)
+        ln.Thickness=1.5; ln.Color=col; ln.Transparency=0.9
+        table.insert(XHair.Draws, ln)
+    end
+    if mode == "Dot" then
+        local d = Drawing.new("Circle")
+        d.Position=Vector2.new(cx,cy); d.Radius=2
+        d.Filled=true; d.Color=col; d.Transparency=0.95
+        table.insert(XHair.Draws, d)
+    elseif mode == "Cross" then
+        L(cx-8,cy,cx-2,cy); L(cx+2,cy,cx+10,cy)
+        L(cx,cy-8,cx,cy-2); L(cx,cy+2,cx,cy+10)
+    elseif mode == "Circle" then
+        local c = Drawing.new("Circle")
+        c.Position=Vector2.new(cx,cy); c.Radius=10
+        c.Filled=false; c.Color=col; c.Thickness=1.2; c.Transparency=0.85
+        table.insert(XHair.Draws, c)
+    end
+end
+
+-- ========================================================
+-- // ESP — v2: box styles, team color, velocity record
 -- ========================================================
 local ESPSys = { Cache={} }
 
 local SKEL = {
-    {"Head","UpperTorso"},
-    {"UpperTorso","LowerTorso"},
-    {"UpperTorso","LeftUpperArm"},
-    {"LeftUpperArm","LeftLowerArm"},
-    {"LeftLowerArm","LeftHand"},
-    {"UpperTorso","RightUpperArm"},
-    {"RightUpperArm","RightLowerArm"},
-    {"RightLowerArm","RightHand"},
-    {"LowerTorso","LeftUpperLeg"},
-    {"LeftUpperLeg","LeftLowerLeg"},
-    {"LeftLowerLeg","LeftFoot"},
-    {"LowerTorso","RightUpperLeg"},
-    {"RightUpperLeg","RightLowerLeg"},
-    {"RightLowerLeg","RightFoot"},
+    {"Head","UpperTorso"},{"UpperTorso","LowerTorso"},
+    {"UpperTorso","LeftUpperArm"},{"LeftUpperArm","LeftLowerArm"},{"LeftLowerArm","LeftHand"},
+    {"UpperTorso","RightUpperArm"},{"RightUpperArm","RightLowerArm"},{"RightLowerArm","RightHand"},
+    {"LowerTorso","LeftUpperLeg"},{"LeftUpperLeg","LeftLowerLeg"},{"LeftLowerLeg","LeftFoot"},
+    {"LowerTorso","RightUpperLeg"},{"RightUpperLeg","RightLowerLeg"},{"RightLowerLeg","RightFoot"},
 }
 
-local function NewLine()
+local function NewDraw(cls, props)
     if not Drawing then return nil end
-    local l = Drawing.new("Line")
-    l.Thickness=1; l.Transparency=1; l.Visible=false
-    return l
+    local ok, d = pcall(function() return Drawing.new(cls) end)
+    if not ok or not d then return nil end
+    if props then for k, v in pairs(props) do pcall(function() d[k] = v end) end end
+    return d
 end
-local function NewSquare()
-    if not Drawing then return nil end
-    local s = Drawing.new("Square")
-    s.Filled=false; s.Transparency=1; s.Visible=false
-    return s
-end
-local function NewText()
-    if not Drawing then return nil end
-    local t = Drawing.new("Text")
-    t.Size=14; t.Outline=true; t.Transparency=1; t.Visible=false
-    return t
+
+local function SafeSet(obj, k, v)
+    if obj then pcall(function() obj[k] = v end) end
 end
 
 function ESPSys.Create(uid)
     if ESPSys.Cache[uid] or not Drawing then return end
     local d = {}
-
-    d.BoxOuter = NewSquare(); if d.BoxOuter then d.BoxOuter.Color=Color3.fromRGB(0,0,0); d.BoxOuter.Thickness=3 end
-    d.Box      = NewSquare(); if d.Box      then d.Box.Color=Color3.fromRGB(255,60,60);  d.Box.Thickness=1.5 end
-
-    d.Corners = {}
-    for i=1,8 do
-        local ln = NewLine()
-        if ln then ln.Color=Color3.fromRGB(255,255,255); ln.Thickness=2 end
-        d.Corners[i] = ln
-    end
-
-    d.Name = NewText(); if d.Name then d.Name.Color=Color3.fromRGB(255,255,255); d.Name.Center=true; d.Name.OutlineColor=Color3.fromRGB(0,0,0) end
-    d.Dist = NewText(); if d.Dist then d.Dist.Color=Color3.fromRGB(200,200,200); d.Dist.Size=12; d.Dist.Center=true; d.Dist.OutlineColor=Color3.fromRGB(0,0,0) end
-
-    d.HPBg = Drawing.new("Square"); d.HPBg.Filled=true; d.HPBg.Color=Color3.fromRGB(0,0,0); d.HPBg.Transparency=0.6; d.HPBg.Visible=false
-    d.HP   = Drawing.new("Square"); d.HP.Filled=true;   d.HP.Color=Color3.fromRGB(80,220,80);   d.HP.Transparency=1;   d.HP.Visible=false
-
-    d.Tracer = NewLine(); if d.Tracer then d.Tracer.Color=Color3.fromRGB(255,60,60); d.Tracer.Transparency=0.85 end
-
-    d.Skel = {}
-    for i=1,#SKEL do
-        local ln = NewLine()
-        if ln then ln.Color=Color3.fromRGB(200,200,255); ln.Transparency=0.75 end
-        d.Skel[i] = ln
-    end
-
+    d.BoxOuter = NewDraw("Square",{Filled=false,Thickness=3,Color=Color3.fromRGB(0,0,0),Visible=false})
+    d.Box      = NewDraw("Square",{Filled=false,Thickness=1.5,Color=Color3.fromRGB(255,60,60),Visible=false})
+    d.BoxFill  = NewDraw("Square",{Filled=true,Color=Color3.fromRGB(255,60,60),Transparency=0.1,Visible=false})
+    d.Corners  = {}
+    for i = 1, 8 do d.Corners[i] = NewDraw("Line",{Thickness=2,Color=Color3.fromRGB(255,255,255),Visible=false}) end
+    d.Name     = NewDraw("Text",{Size=14,Outline=true,OutlineColor=Color3.fromRGB(0,0,0),Color=Color3.fromRGB(255,255,255),Center=true,Visible=false})
+    d.Dist     = NewDraw("Text",{Size=12,Outline=true,OutlineColor=Color3.fromRGB(0,0,0),Color=Color3.fromRGB(200,200,200),Center=true,Visible=false})
+    d.HPBg     = NewDraw("Square",{Filled=true,Color=Color3.fromRGB(0,0,0),Transparency=0.55,Visible=false})
+    d.HP       = NewDraw("Square",{Filled=true,Color=Color3.fromRGB(80,220,80),Transparency=1,Visible=false})
+    d.Tracer   = NewDraw("Line",{Thickness=1,Color=Color3.fromRGB(255,60,60),Transparency=0.8,Visible=false})
+    d.Skel     = {}
+    for i = 1, #SKEL do d.Skel[i] = NewDraw("Line",{Thickness=1,Color=Color3.fromRGB(180,180,255),Transparency=0.7,Visible=false}) end
     ESPSys.Cache[uid] = d
 end
 
 local function HideAll(d)
     if not d then return end
-    local function hd(o) if o and typeof(o)=="userdata" then pcall(function() o.Visible=false end) end end
-    hd(d.BoxOuter); hd(d.Box); hd(d.Name); hd(d.Dist); hd(d.HP); hd(d.HPBg); hd(d.Tracer)
-    if d.Corners then for _,c in ipairs(d.Corners) do hd(c) end end
-    if d.Skel    then for _,s in ipairs(d.Skel)    do hd(s) end end
+    local function hv(o) SafeSet(o,"Visible",false) end
+    hv(d.BoxOuter); hv(d.Box); hv(d.BoxFill); hv(d.Name); hv(d.Dist)
+    hv(d.HP); hv(d.HPBg); hv(d.Tracer)
+    if d.Corners then for _,c in ipairs(d.Corners) do hv(c) end end
+    if d.Skel    then for _,s in ipairs(d.Skel)    do hv(s) end end
 end
 
 function ESPSys.Remove(uid)
     local d = ESPSys.Cache[uid]
     if not d then return end
     HideAll(d)
-    local function rm(o)
-        if o and typeof(o)=="userdata" then pcall(function() o:Remove() end) end
-    end
-    rm(d.BoxOuter); rm(d.Box); rm(d.Name); rm(d.Dist); rm(d.HP); rm(d.HPBg); rm(d.Tracer)
+    local function rm(o) if o then pcall(function() o:Remove() end) end end
+    rm(d.BoxOuter); rm(d.Box); rm(d.BoxFill); rm(d.Name); rm(d.Dist)
+    rm(d.HP); rm(d.HPBg); rm(d.Tracer)
     if d.Corners then for _,c in ipairs(d.Corners) do rm(c) end end
     if d.Skel    then for _,s in ipairs(d.Skel)    do rm(s) end end
     ESPSys.Cache[uid] = nil
 end
 
-local function Corners(d, x, y, w, h)
-    local cl = math.min(w,h)*0.22
+local function DrawCorners(d, x, y, w, h, col)
+    local cl = math.min(w, h) * 0.22
     local defs = {
-        {Vector2.new(x,y),       Vector2.new(x+cl,y)},
-        {Vector2.new(x,y),       Vector2.new(x,y+cl)},
-        {Vector2.new(x+w,y),     Vector2.new(x+w-cl,y)},
-        {Vector2.new(x+w,y),     Vector2.new(x+w,y+cl)},
-        {Vector2.new(x,y+h),     Vector2.new(x+cl,y+h)},
-        {Vector2.new(x,y+h),     Vector2.new(x,y+h-cl)},
-        {Vector2.new(x+w,y+h),   Vector2.new(x+w-cl,y+h)},
-        {Vector2.new(x+w,y+h),   Vector2.new(x+w,y+h-cl)},
+        {Vector2.new(x,y),     Vector2.new(x+cl,y)},
+        {Vector2.new(x,y),     Vector2.new(x,y+cl)},
+        {Vector2.new(x+w,y),   Vector2.new(x+w-cl,y)},
+        {Vector2.new(x+w,y),   Vector2.new(x+w,y+cl)},
+        {Vector2.new(x,y+h),   Vector2.new(x+cl,y+h)},
+        {Vector2.new(x,y+h),   Vector2.new(x,y+h-cl)},
+        {Vector2.new(x+w,y+h), Vector2.new(x+w-cl,y+h)},
+        {Vector2.new(x+w,y+h), Vector2.new(x+w,y+h-cl)},
     }
-    for i,def in ipairs(defs) do
+    for i, def in ipairs(defs) do
         local c = d.Corners[i]
-        if c then c.From=def[1]; c.To=def[2]; c.Visible=true end
+        if c then
+            SafeSet(c,"From",def[1]); SafeSet(c,"To",def[2])
+            if col then SafeSet(c,"Color",col) end
+            SafeSet(c,"Visible",true)
+        end
     end
 end
 
+local lastVelTick = 0
 function ESPSys.Update()
     if not Drawing then return end
+    local now = os.clock()
     local cam = GetCamera()
     local lrOk, localRoot = pcall(function() return Util.Root(LocalPlayer) end)
-    if not lrOk then localRoot=nil end
+    if not lrOk then localRoot = nil end
     local lPos = nil
     if localRoot then pcall(function() lPos = localRoot.Position end) end
 
@@ -524,135 +635,159 @@ function ESPSys.Update()
             local uid = player.UserId
             ESPSys.Create(uid)
             local d = ESPSys.Cache[uid]
-            if not d then goto nextesp end
+            if not d then continue end
 
-            if not S("ESP") then HideAll(d); goto nextesp end
-
-            -- all reads wrapped so a single nil doesn't blow the loop
-            local isAlive = Util.Alive(player)
-            if not isAlive then HideAll(d); goto nextesp end
+            if not S("ESP") then HideAll(d); continue end
+            if not Util.Alive(player) then HideAll(d); continue end
 
             local root = Util.Root(player)
             local head = Util.Part(player, "Head")
-            if not root or not head then HideAll(d); goto nextesp end
+            if not root or not head then HideAll(d); continue end
 
             local rPos, hPos
             local rOk = pcall(function() rPos = root.Position end)
             local hOk = pcall(function() hPos = head.Position end)
-            if not rOk or not hOk or not rPos or not hPos then HideAll(d); goto nextesp end
+            if not rOk or not hOk or not rPos or not hPos then HideAll(d); continue end
+
+            -- record velocity for prediction
+            if (now - lastVelTick) >= 0.05 then
+                RecordVel(uid, rPos, 0.05)
+            end
 
             local dist = lPos and Util.Dist(rPos, lPos) or 0
-            if dist > (S("ESPMaxDist") or 500) then HideAll(d); goto nextesp end
-
-            if not cam then HideAll(d); goto nextesp end
+            if dist > (S("ESPMaxDist") or 500) then HideAll(d); continue end
+            if not cam then HideAll(d); continue end
 
             local sr, visR, zR = Util.W2S(rPos)
             local sh, visH     = Util.W2S(hPos)
-            if not visR or zR <= 0 then HideAll(d); goto nextesp end
+            if not visR or zR <= 0 then HideAll(d); continue end
 
             local height = math.abs(sr.Y - sh.Y) * 2.2
             local width  = height * 0.55
             local bx, by = sr.X - width/2, sr.Y - height*0.85
+            local boxStyle = S("ESPBoxStyle") or "Corner"
 
-            -- Box
+            local baseColor = S("ESPTeamColor") and Util.TeamColor(player) or Color3.fromRGB(255,60,60)
+
+            -- hide all first, selectively show
+            SafeSet(d.BoxOuter,"Visible",false)
+            SafeSet(d.Box,"Visible",false)
+            SafeSet(d.BoxFill,"Visible",false)
+            if d.Corners then for _,c in ipairs(d.Corners) do SafeSet(c,"Visible",false) end end
+
             if S("ESPBoxes") then
-                if d.BoxOuter then d.BoxOuter.Position=Vector2.new(bx-1,by-1); d.BoxOuter.Size=Vector2.new(width+2,height+2); d.BoxOuter.Visible=true end
-                if d.Box      then d.Box.Position=Vector2.new(bx,by);          d.Box.Size=Vector2.new(width,height);          d.Box.Visible=true end
-                Corners(d,bx,by,width,height)
-            else
-                if d.BoxOuter then d.BoxOuter.Visible=false end
-                if d.Box      then d.Box.Visible=false end
-                if d.Corners  then for _,c in ipairs(d.Corners) do if c then c.Visible=false end end end
+                if boxStyle == "Corner" then
+                    DrawCorners(d, bx, by, width, height, baseColor)
+                elseif boxStyle == "Full" then
+                    SafeSet(d.BoxOuter,"Position",Vector2.new(bx-1,by-1))
+                    SafeSet(d.BoxOuter,"Size",Vector2.new(width+2,height+2))
+                    SafeSet(d.BoxOuter,"Visible",true)
+                    SafeSet(d.Box,"Position",Vector2.new(bx,by))
+                    SafeSet(d.Box,"Size",Vector2.new(width,height))
+                    SafeSet(d.Box,"Color",baseColor)
+                    SafeSet(d.Box,"Visible",true)
+                elseif boxStyle == "Fill" then
+                    SafeSet(d.BoxFill,"Position",Vector2.new(bx,by))
+                    SafeSet(d.BoxFill,"Size",Vector2.new(width,height))
+                    SafeSet(d.BoxFill,"Color",baseColor)
+                    SafeSet(d.BoxFill,"Visible",true)
+                end
             end
 
-            -- Name
             if S("ESPNames") and d.Name then
-                local ok, dn = pcall(function() return player.DisplayName end)
-                d.Name.Text    = ok and dn or player.Name
-                d.Name.Position= Vector2.new(bx+width/2, by-18)
-                d.Name.Visible = true
-            elseif d.Name then d.Name.Visible=false end
+                local ok2, dn = pcall(function() return player.DisplayName end)
+                SafeSet(d.Name,"Text",(ok2 and dn) or player.Name)
+                SafeSet(d.Name,"Position",Vector2.new(bx+width/2, by-18))
+                SafeSet(d.Name,"Color",baseColor)
+                SafeSet(d.Name,"Visible",true)
+            elseif d.Name then SafeSet(d.Name,"Visible",false) end
 
-            -- Distance
             if S("ESPDistance") and d.Dist then
-                d.Dist.Text    = math.floor(dist).."m"
-                d.Dist.Position= Vector2.new(bx+width/2, by+height+3)
-                d.Dist.Visible = true
-            elseif d.Dist then d.Dist.Visible=false end
+                SafeSet(d.Dist,"Text",math.floor(dist).."m")
+                SafeSet(d.Dist,"Position",Vector2.new(bx+width/2, by+height+3))
+                SafeSet(d.Dist,"Visible",true)
+            elseif d.Dist then SafeSet(d.Dist,"Visible",false) end
 
-            -- Health
             if S("ESPHealth") and d.HP and d.HPBg then
                 local hum = Util.Hum(player)
                 local hp, maxHp = 100, 100
-                if hum then
-                    pcall(function() hp=hum.Health; maxHp=hum.MaxHealth end)
-                end
+                if hum then pcall(function() hp=hum.Health; maxHp=hum.MaxHealth end) end
                 local ratio = math.clamp(hp/math.max(maxHp,1),0,1)
-                local bW,bH = 4,height
-                local bX,bY = bx-bW-3, by
-                d.HPBg.Position=Vector2.new(bX,bY); d.HPBg.Size=Vector2.new(bW,bH); d.HPBg.Visible=true
-                d.HP.Position  =Vector2.new(bX,bY+bH*(1-ratio)); d.HP.Size=Vector2.new(bW,bH*ratio)
-                d.HP.Color     = Util.HPColor(hp,maxHp); d.HP.Visible=true
-            elseif d.HP then d.HP.Visible=false; d.HPBg.Visible=false end
+                local bW, bH = 4, height
+                local bX, bY = bx-bW-3, by
+                SafeSet(d.HPBg,"Position",Vector2.new(bX,bY)); SafeSet(d.HPBg,"Size",Vector2.new(bW,bH)); SafeSet(d.HPBg,"Visible",true)
+                SafeSet(d.HP,"Position",Vector2.new(bX,bY+bH*(1-ratio))); SafeSet(d.HP,"Size",Vector2.new(bW,bH*ratio))
+                SafeSet(d.HP,"Color",Util.HPColor(hp,maxHp)); SafeSet(d.HP,"Visible",true)
+            else SafeSet(d.HP,"Visible",false); SafeSet(d.HPBg,"Visible",false) end
 
-            -- Tracer
             if S("ESPTracers") and d.Tracer and cam then
-                local ok2,vp = pcall(function() return cam.ViewportSize end)
+                local ok2, vp = pcall(function() return cam.ViewportSize end)
                 if ok2 and vp then
                     local orig = S("ESPTracerOrigin") or "Bottom"
                     local fy = orig=="Top" and 0 or (orig=="Center" and vp.Y/2 or vp.Y)
-                    d.Tracer.From=Vector2.new(vp.X/2,fy); d.Tracer.To=Vector2.new(sr.X,sr.Y); d.Tracer.Visible=true
+                    SafeSet(d.Tracer,"From",Vector2.new(vp.X/2,fy))
+                    SafeSet(d.Tracer,"To",Vector2.new(sr.X,sr.Y))
+                    SafeSet(d.Tracer,"Color",baseColor)
+                    SafeSet(d.Tracer,"Visible",true)
                 end
-            elseif d.Tracer then d.Tracer.Visible=false end
+            elseif d.Tracer then SafeSet(d.Tracer,"Visible",false) end
 
-            -- Skeleton
             if S("ESPSkeleton") then
                 local char = Util.Char(player)
-                for i,pair in ipairs(SKEL) do
+                for i, pair in ipairs(SKEL) do
                     local ln = d.Skel[i]
                     if ln and char then
-                        local p1ok,p1 = pcall(function() return char:FindFirstChild(pair[1]) end)
-                        local p2ok,p2 = pcall(function() return char:FindFirstChild(pair[2]) end)
+                        local p1ok, p1 = pcall(function() return char:FindFirstChild(pair[1]) end)
+                        local p2ok, p2 = pcall(function() return char:FindFirstChild(pair[2]) end)
                         if p1ok and p2ok and p1 and p2 then
-                            local s1,v1 = Util.W2S(p1.Position)
-                            local s2,v2 = Util.W2S(p2.Position)
-                            if v1 and v2 then
-                                ln.From=s1; ln.To=s2; ln.Visible=true
-                            else ln.Visible=false end
-                        else ln.Visible=false end
-                    elseif ln then ln.Visible=false end
+                            local ok3, pos1 = pcall(function() return p1.Position end)
+                            local ok4, pos2 = pcall(function() return p2.Position end)
+                            if ok3 and ok4 and pos1 and pos2 then
+                                local s1, v1 = Util.W2S(pos1)
+                                local s2, v2 = Util.W2S(pos2)
+                                if v1 and v2 then
+                                    SafeSet(ln,"From",s1); SafeSet(ln,"To",s2)
+                                    SafeSet(ln,"Color",baseColor)
+                                    SafeSet(ln,"Visible",true)
+                                else SafeSet(ln,"Visible",false) end
+                            else SafeSet(ln,"Visible",false) end
+                        else SafeSet(ln,"Visible",false) end
+                    elseif ln then SafeSet(ln,"Visible",false) end
                 end
             else
-                if d.Skel then for _,s in ipairs(d.Skel) do if s then s.Visible=false end end end
+                if d.Skel then for _, s in ipairs(d.Skel) do SafeSet(s,"Visible",false) end end
             end
-
-            ::nextesp::
         end
     end
 
-    -- clean up left players
+    if (now - lastVelTick) >= 0.05 then lastVelTick = now end
+
     for uid in pairs(ESPSys.Cache) do
-        if not alive[uid] then
-            ESPSys.Remove(uid)
-        end
+        if not alive[uid] then ESPSys.Remove(uid) end
     end
 end
 
 -- ========================================================
--- // CHAMS
+-- // CHAMS — multi-style
 -- ========================================================
 local Chams = { Orig={} }
+local ChamStyles = {
+    Neon  = { Material=Enum.Material.Neon,  Color=Color3.fromRGB(255,0,80),  Trans=0.3 },
+    Glass = { Material=Enum.Material.Glass, Color=Color3.fromRGB(0,180,255), Trans=0.5 },
+    Solid = { Material=Enum.Material.SmoothPlastic, Color=Color3.fromRGB(255,200,0), Trans=0 },
+}
 function Chams.Apply(p)
     local char = Util.Char(p)
     if not char then return end
+    local style = ChamStyles[S("ChamStyle") or "Neon"] or ChamStyles.Neon
     Chams.Orig[p.UserId] = Chams.Orig[p.UserId] or {}
     for _, part in ipairs(char:GetDescendants()) do
         if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
             pcall(function()
                 if not Chams.Orig[p.UserId][part] then
-                    Chams.Orig[p.UserId][part]={Mat=part.Material,Color=part.Color,Trans=part.Transparency}
+                    Chams.Orig[p.UserId][part] = {Mat=part.Material,Color=part.Color,Trans=part.Transparency}
                 end
-                part.Material=Enum.Material.Neon; part.Color=Color3.fromRGB(255,0,80); part.Transparency=0.3
+                part.Material=style.Material; part.Color=style.Color; part.Transparency=style.Trans
             end)
         end
     end
@@ -660,17 +795,17 @@ end
 function Chams.Remove(p)
     local saved = p and Chams.Orig[p.UserId]
     if not saved then return end
-    for part,orig in pairs(saved) do
+    for part, orig in pairs(saved) do
         pcall(function()
             if part and part.Parent then
                 part.Material=orig.Mat; part.Color=orig.Color; part.Transparency=orig.Trans
             end
         end)
     end
-    Chams.Orig[p.UserId]=nil
+    Chams.Orig[p.UserId] = nil
 end
 function Chams.Tick()
-    for _,p in ipairs(Players:GetPlayers()) do
+    for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
             if S("Chams") then Chams.Apply(p)
             elseif Chams.Orig[p.UserId] then Chams.Remove(p) end
@@ -684,12 +819,17 @@ end
 local FB = { Orig=nil }
 function FB.On()
     if not FB.Orig then
-        FB.Orig={Brightness=Lighting.Brightness,GlobalShadows=Lighting.GlobalShadows,FogEnd=Lighting.FogEnd,FogStart=Lighting.FogStart}
+        FB.Orig = {
+            Brightness=Lighting.Brightness, GlobalShadows=Lighting.GlobalShadows,
+            FogEnd=Lighting.FogEnd, FogStart=Lighting.FogStart, Ambient=Lighting.Ambient
+        }
     end
-    Lighting.Brightness=5; Lighting.GlobalShadows=false; Lighting.FogEnd=1e6; Lighting.FogStart=1e6
-    for _,v in ipairs(Lighting:GetChildren()) do
+    Lighting.Brightness=6; Lighting.GlobalShadows=false
+    Lighting.FogEnd=1e9; Lighting.FogStart=1e9
+    Lighting.Ambient=Color3.fromRGB(255,255,255)
+    for _, v in ipairs(Lighting:GetChildren()) do
         if v:IsA("Atmosphere") or v:IsA("BlurEffect") or v:IsA("ColorCorrectionEffect") then
-            pcall(function() v.Parent=nil end)
+            pcall(function() v.Parent = nil end)
         end
     end
 end
@@ -697,8 +837,20 @@ function FB.Off()
     if FB.Orig then
         Lighting.Brightness=FB.Orig.Brightness; Lighting.GlobalShadows=FB.Orig.GlobalShadows
         Lighting.FogEnd=FB.Orig.FogEnd; Lighting.FogStart=FB.Orig.FogStart
+        Lighting.Ambient=FB.Orig.Ambient
     end
-    FB.Orig=nil
+    FB.Orig = nil
+end
+
+-- ========================================================
+-- // FOV CHANGER
+-- ========================================================
+local function ApplyFOVChanger()
+    local cam = GetCamera()
+    if not cam then return end
+    pcall(function()
+        cam.FieldOfView = S("FOVChanger") and (S("CustomFOV") or 90) or 70
+    end)
 end
 
 -- ========================================================
@@ -709,9 +861,8 @@ local Move = {}
 function Move.Fly()
     if not S("Fly") then return end
     local char = Util.Char(LocalPlayer)
-    if not char then return end
-    local cam = GetCamera()
-    if not cam then return end
+    local cam  = GetCamera()
+    if not char or not cam then return end
     pcall(function()
         local hrp = char:FindFirstChild("HumanoidRootPart")
         local hum = char:FindFirstChildOfClass("Humanoid")
@@ -719,13 +870,13 @@ function Move.Fly()
         hum:ChangeState(Enum.HumanoidStateType.Swimming)
         local dir = Vector3.zero
         local UIS = UserInputService
-        if UIS:IsKeyDown(Enum.KeyCode.W) then dir+=cam.CFrame.LookVector  end
-        if UIS:IsKeyDown(Enum.KeyCode.S) then dir-=cam.CFrame.LookVector  end
-        if UIS:IsKeyDown(Enum.KeyCode.A) then dir-=cam.CFrame.RightVector end
-        if UIS:IsKeyDown(Enum.KeyCode.D) then dir+=cam.CFrame.RightVector end
-        if UIS:IsKeyDown(Enum.KeyCode.Space)     then dir+=Vector3.yAxis end
-        if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then dir-=Vector3.yAxis end
-        hrp.AssemblyLinearVelocity = (dir.Magnitude>0 and dir.Unit or Vector3.zero)*(S("FlySpeed") or 50)
+        if UIS:IsKeyDown(Enum.KeyCode.W)         then dir += cam.CFrame.LookVector  end
+        if UIS:IsKeyDown(Enum.KeyCode.S)         then dir -= cam.CFrame.LookVector  end
+        if UIS:IsKeyDown(Enum.KeyCode.A)         then dir -= cam.CFrame.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.D)         then dir += cam.CFrame.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.Space)     then dir += Vector3.yAxis end
+        if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then dir -= Vector3.yAxis end
+        hrp.AssemblyLinearVelocity = (dir.Magnitude > 0 and dir.Unit or Vector3.zero) * (S("FlySpeed") or 50)
     end)
 end
 
@@ -734,8 +885,8 @@ function Move.Noclip()
     local char = Util.Char(LocalPlayer)
     if not char then return end
     pcall(function()
-        for _,p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") then p.CanCollide=false end
+        for _, p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
         end
     end)
 end
@@ -746,6 +897,12 @@ function Move.Speed()
     pcall(function()
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then hum.WalkSpeed = S("SpeedHack") and (16*(S("SpeedMult") or 1.5)) or 16 end
+    end)
+end
+
+function Move.Gravity()
+    pcall(function()
+        Workspace.Gravity = S("LowGravity") and 40 or 196.2
     end)
 end
 
@@ -760,54 +917,74 @@ Track(UserInputService.JumpRequest:Connect(function()
 end))
 
 -- ========================================================
+-- // WATERMARK
+-- ========================================================
+local WM = { D=nil }
+function WM.Tick()
+    if not Drawing then return end
+    if not WM.D then
+        WM.D = NewDraw("Text",{
+            Size=13, Outline=true, OutlineColor=Color3.fromRGB(0,0,0),
+            Color=Color3.fromRGB(0,215,155), Visible=false
+        })
+    end
+    if S("WatermarkShow") then
+        local cam = GetCamera()
+        local ok, vp = pcall(function() return cam and cam.ViewportSize end)
+        SafeSet(WM.D,"Text",("BIBILABU v7.0  |  fps:%d  |  t:%ds"):format(
+            math.floor(1 / math.max(RunService.RenderStepped:Wait() + 0.0001, 0.0001)),
+            math.floor(os.clock() - Runtime.StartTime)
+        ))
+        SafeSet(WM.D,"Position",Vector2.new(6,6))
+        SafeSet(WM.D,"Visible",true)
+    else
+        SafeSet(WM.D,"Visible",false)
+    end
+end
+
+-- ========================================================
 -- // NOTIFICATIONS
 -- ========================================================
 local Notif = { Q={}, Max=6 }
-local NX,NY,NH = 16,16,28
+local NX, NY, NH = 16, 16, 28
 
-function Notif.Push(title,msg,dur,color)
+function Notif.Push(title, msg, dur, color)
     if not S("Notifications") or not Drawing then return end
     dur = dur or 3.5
     local now = os.clock()
     local n = {
-        BG     = Drawing.new("Square"),
-        Accent = Drawing.new("Square"),
-        Text   = Drawing.new("Text"),
+        BG     = NewDraw("Square",{Filled=true,Color=Color3.fromRGB(12,12,18),Transparency=0,Visible=false}),
+        Accent = NewDraw("Square",{Filled=true,Color=color or Color3.fromRGB(0,215,155),Transparency=0,Visible=false}),
+        Text   = NewDraw("Text",{Size=13,Color=Color3.fromRGB(240,240,240),Outline=true,OutlineColor=Color3.fromRGB(0,0,0),Visible=false}),
         Born   = now,
-        Exp    = now+dur,
+        Exp    = now + dur,
     }
-    n.BG.Filled=true; n.BG.Color=Color3.fromRGB(16,16,22); n.BG.Transparency=0
-    n.Accent.Filled=true; n.Accent.Color=(color or Color3.fromRGB(0,215,155)); n.Accent.Transparency=0
-    n.Text.Size=14; n.Text.Color=Color3.fromRGB(240,240,240); n.Text.Outline=true
-    n.Text.OutlineColor=Color3.fromRGB(0,0,0)
-    n.Text.Text="["..title.."] "..msg
-    table.insert(Notif.Q,n)
-    if #Notif.Q > Notif.Max then
+    if n.Text then SafeSet(n.Text,"Text","["..title.."] "..msg) end
+    table.insert(Notif.Q, n)
+    while #Notif.Q > Notif.Max do
         local old = table.remove(Notif.Q,1)
         pcall(function() old.BG:Remove(); old.Accent:Remove(); old.Text:Remove() end)
     end
-    task.delay(dur,function()
-        for i,x in ipairs(Notif.Q) do
-            if x==n then table.remove(Notif.Q,i); break end
+    task.delay(dur + 0.5, function()
+        for i, x in ipairs(Notif.Q) do
+            if x == n then table.remove(Notif.Q, i); break end
         end
-        task.wait(0.4)
         pcall(function() n.BG:Remove(); n.Accent:Remove(); n.Text:Remove() end)
     end)
 end
 
 function Notif.Tick()
-    local now=os.clock()
-    for i,n in ipairs(Notif.Q) do
-        local life=n.Exp-n.Born
-        local t=(now-n.Born)/life
-        local a = t<0.15 and t/0.15 or (t>0.80 and (1-t)/0.20 or 1)
-        a=math.clamp(a,0,1)
-        local y=NY+(i-1)*(NH+4)
-        pcall(function()
-            n.BG.Position=Vector2.new(NX,y);     n.BG.Size=Vector2.new(260,NH);  n.BG.Transparency=a*0.92
-            n.Accent.Position=Vector2.new(NX,y);  n.Accent.Size=Vector2.new(3,NH); n.Accent.Transparency=a
-            n.Text.Position=Vector2.new(NX+10,y+7); n.Text.Transparency=a
-        end)
+    local now = os.clock()
+    for i, n in ipairs(Notif.Q) do
+        local life = n.Exp - n.Born
+        local t    = (now - n.Born) / life
+        local a    = t < 0.15 and t/0.15 or (t > 0.80 and (1-t)/0.20 or 1)
+        a = math.clamp(a, 0, 1)
+        local y = NY + (i-1)*(NH+4)
+        SafeSet(n.BG,"Position",Vector2.new(NX,y));    SafeSet(n.BG,"Size",Vector2.new(280,NH));  SafeSet(n.BG,"Transparency",a*0.93)
+        SafeSet(n.Accent,"Position",Vector2.new(NX,y)); SafeSet(n.Accent,"Size",Vector2.new(3,NH)); SafeSet(n.Accent,"Transparency",a)
+        SafeSet(n.Text,"Position",Vector2.new(NX+10,y+7)); SafeSet(n.Text,"Transparency",a)
+        SafeSet(n.BG,"Visible",true); SafeSet(n.Accent,"Visible",true); SafeSet(n.Text,"Visible",true)
     end
 end
 
@@ -817,202 +994,232 @@ end
 local Panic = { On=false, Saved={} }
 function Panic.Toggle()
     if not Panic.On then
-        Panic.On=true
-        for k,v in pairs(Settings) do
-            if v.Type=="toggle" then Panic.Saved[k]=v.Value; v.Value=false end
+        Panic.On = true
+        for k, v in pairs(Settings) do
+            if v.Type == "toggle" then Panic.Saved[k]=v.Value; v.Value=false end
         end
         Target.Clear()
-        if FOVCircle then FOVCircle.Visible=false end
+        SafeSet(FOVCircle,"Visible",false)
         for _,d in pairs(ESPSys.Cache) do HideAll(d) end
+        XHair.Clear()
         Notif.Push("PANIC","All features killed",5,Color3.fromRGB(220,50,50))
     else
-        Panic.On=false
+        Panic.On = false
         for k,v in pairs(Panic.Saved) do if Settings[k] then Settings[k].Value=v end end
         Notif.Push("RESTORED","Back online",3,Color3.fromRGB(0,215,155))
     end
 end
 
 -- ========================================================
--- // MENU UI
+-- // MENU UI v2
 -- ========================================================
 local Menu = {
-    Vis=true, Pos=Vector2.new(80,80), W=240,
-    HdrH=30, TabH=24, RowH=26, Pad=10,
+    Vis=true, Pos=Vector2.new(80,80), W=260,
+    HdrH=32, TabH=26, RowH=27, Pad=10,
     Tabs={"Aimbot","ESP","Visuals","Movement","Misc"},
     ActiveTab="Aimbot",
     Drw={}, Drag=false, DragOff=Vector2.zero,
-    Rows={}, ClickCD=0,
+    Rows={}, ClickCD=0, Built=false,
+    MinimizeH=false,
 }
 
 local AC   = Color3.fromRGB(0,215,155)
-local BG1  = Color3.fromRGB(14,14,18)
-local BG2  = Color3.fromRGB(22,22,28)
-local BG3  = Color3.fromRGB(28,28,36)
-local BG4  = Color3.fromRGB(24,24,32)
+local BG1  = Color3.fromRGB(12,12,16)
+local BG2  = Color3.fromRGB(20,20,26)
+local BG3  = Color3.fromRGB(26,26,34)
+local BG4  = Color3.fromRGB(22,22,30)
 local TPRI = Color3.fromRGB(235,235,235)
-local TSEC = Color3.fromRGB(130,130,145)
+local TSEC = Color3.fromRGB(120,120,138)
 local TACT = Color3.fromRGB(0,200,145)
-local TIDLE= Color3.fromRGB(75,75,90)
+local TIDLE= Color3.fromRGB(70,70,88)
 
-local function MD(class)
+local function MD(cls, props)
     if not Drawing then return nil end
-    local ok,o = pcall(function() return Drawing.new(class) end)
-    if ok and o then table.insert(Menu.Drw,o); return o end
-    return nil
+    local ok, d = pcall(function() return Drawing.new(cls) end)
+    if not ok or not d then return nil end
+    if props then for k,v in pairs(props) do pcall(function() d[k]=v end) end end
+    table.insert(Menu.Drw, d)
+    return d
+end
+
+function Menu.ClearDraw()
+    for _, d in ipairs(Menu.Drw) do pcall(function() d:Remove() end) end
+    Menu.Drw  = {}
+    Menu.Rows = {}
 end
 
 function Menu.Build()
-    for _,d in ipairs(Menu.Drw) do pcall(function() d:Remove() end) end
-    Menu.Drw={}; Menu.Rows={}
+    Menu.ClearDraw()
     if not Drawing or not Menu.Vis then return end
+    local p = Menu.Pos; local W = Menu.W
+    local tabW = math.floor(W / #Menu.Tabs)
 
-    local p=Menu.Pos; local W=Menu.W
-    local tabW = W/#Menu.Tabs
-
-    local rows={}
-    for k,v in pairs(Settings) do
-        if v.Tab==Menu.ActiveTab then table.insert(rows,{K=k,C=v}) end
+    local rows = {}
+    for k, v in pairs(Settings) do
+        if v.Tab == Menu.ActiveTab then table.insert(rows, {K=k, C=v}) end
     end
-    table.sort(rows,function(a,b) return a.K<b.K end)
+    table.sort(rows, function(a,b) return a.K < b.K end)
 
-    local contentH = #rows*Menu.RowH + 8
+    local contentH = not Menu.MinimizeH and (#rows * Menu.RowH + 8) or 0
     local totalH   = Menu.HdrH + Menu.TabH + contentH
 
     -- shadow
-    local sh=MD("Square"); if sh then sh.Position=Vector2.new(p.X-3,p.Y-3); sh.Size=Vector2.new(W+6,totalH+6); sh.Color=Color3.fromRGB(0,0,0); sh.Filled=true; sh.Transparency=0.35 end
+    MD("Square",{Position=Vector2.new(p.X-3,p.Y-3),Size=Vector2.new(W+6,totalH+6),Color=Color3.fromRGB(0,0,0),Filled=true,Transparency=0.3})
     -- bg
-    local bg=MD("Square"); if bg then bg.Position=p; bg.Size=Vector2.new(W,totalH); bg.Color=BG1; bg.Filled=true; bg.Transparency=0.95 end
-    -- header
-    local hdr=MD("Square"); if hdr then hdr.Position=p; hdr.Size=Vector2.new(W,Menu.HdrH); hdr.Color=BG2; hdr.Filled=true; hdr.Transparency=1 end
+    MD("Square",{Position=p,Size=Vector2.new(W,totalH),Color=BG1,Filled=true,Transparency=0.96})
+    -- header bg
+    MD("Square",{Position=p,Size=Vector2.new(W,Menu.HdrH),Color=BG2,Filled=true,Transparency=1})
     -- accent strip
-    local st=MD("Square"); if st then st.Position=p; st.Size=Vector2.new(3,Menu.HdrH); st.Color=AC; st.Filled=true; st.Transparency=1 end
+    MD("Square",{Position=p,Size=Vector2.new(3,Menu.HdrH),Color=AC,Filled=true,Transparency=1})
     -- title
-    local tl=MD("Text"); if tl then tl.Text="BIBILABU HUB  v6.1"; tl.Position=Vector2.new(p.X+12,p.Y+7); tl.Size=15; tl.Color=TPRI; tl.Outline=true; tl.OutlineColor=Color3.fromRGB(0,0,0) end
-    -- close hint
-    local ch=MD("Text"); if ch then ch.Text="[INS]"; ch.Position=Vector2.new(p.X+W-38,p.Y+8); ch.Size=12; ch.Color=TSEC; ch.Outline=false end
+    MD("Text",{Text="BIBILABU HUB  v7.0",Position=Vector2.new(p.X+12,p.Y+8),Size=15,Color=TPRI,Outline=true,OutlineColor=Color3.fromRGB(0,0,0)})
+    -- hints
+    MD("Text",{Text="[INS]",Position=Vector2.new(p.X+W-38,p.Y+9),Size=12,Color=TSEC,Outline=false})
+    -- tab bar
+    MD("Square",{Position=Vector2.new(p.X,p.Y+Menu.HdrH),Size=Vector2.new(W,Menu.TabH),Color=BG2,Filled=true,Transparency=1})
 
-    -- tab bar bg
-    local tbg=MD("Square"); if tbg then tbg.Position=Vector2.new(p.X,p.Y+Menu.HdrH); tbg.Size=Vector2.new(W,Menu.TabH); tbg.Color=BG2; tbg.Filled=true; tbg.Transparency=1 end
-
-    for i,tab in ipairs(Menu.Tabs) do
-        local tx=p.X+(i-1)*tabW; local ty=p.Y+Menu.HdrH
-        local isActive=tab==Menu.ActiveTab
-        local btn=MD("Square"); if btn then btn.Position=Vector2.new(tx,ty); btn.Size=Vector2.new(tabW,Menu.TabH); btn.Color=(isActive and Color3.fromRGB(20,20,26) or BG2); btn.Filled=true; btn.Transparency=1 end
-        if isActive then
-            local ul=MD("Square"); if ul then ul.Position=Vector2.new(tx+2,ty+Menu.TabH-3); ul.Size=Vector2.new(tabW-4,2); ul.Color=AC; ul.Filled=true; ul.Transparency=1 end
+    for i, tab in ipairs(Menu.Tabs) do
+        local tx = p.X + (i-1)*tabW; local ty = p.Y + Menu.HdrH
+        local isAct = tab == Menu.ActiveTab
+        MD("Square",{Position=Vector2.new(tx,ty),Size=Vector2.new(tabW,Menu.TabH),Color=(isAct and BG3 or BG2),Filled=true,Transparency=1})
+        if isAct then
+            MD("Square",{Position=Vector2.new(tx+2,ty+Menu.TabH-2),Size=Vector2.new(tabW-4,2),Color=AC,Filled=true,Transparency=1})
         end
-        local tl2=MD("Text"); if tl2 then tl2.Text=tab; tl2.Position=Vector2.new(tx+tabW/2,ty+5); tl2.Size=12; tl2.Center=true; tl2.Color=(isActive and TACT or TIDLE); tl2.Outline=false end
+        MD("Text",{Text=tab,Position=Vector2.new(tx+tabW/2,ty+6),Size=11,Center=true,Color=(isAct and TACT or TIDLE),Outline=false})
         table.insert(Menu.Rows,{Type="tab",Tab=tab,B={X=tx,Y=ty,W=tabW,H=Menu.TabH}})
     end
 
-    local ry0=p.Y+Menu.HdrH+Menu.TabH+4
-    for idx,row in ipairs(rows) do
+    if Menu.MinimizeH then return end
+
+    local ry0 = p.Y + Menu.HdrH + Menu.TabH + 4
+    for idx, row in ipairs(rows) do
         local k=row.K; local cfg=row.C
-        local ry=ry0+(idx-1)*Menu.RowH
-        local alt=idx%2==0
-        local rbg=MD("Square"); if rbg then rbg.Position=Vector2.new(p.X+4,ry); rbg.Size=Vector2.new(W-8,Menu.RowH-2); rbg.Color=(alt and BG4 or BG3); rbg.Filled=true; rbg.Transparency=0.82 end
-        local lbl=MD("Text"); if lbl then lbl.Text=k; lbl.Position=Vector2.new(p.X+Menu.Pad+4,ry+6); lbl.Size=13; lbl.Color=TPRI; lbl.Outline=true; lbl.OutlineColor=Color3.fromRGB(0,0,0) end
+        local ry = ry0 + (idx-1)*Menu.RowH
+        local alt = idx%2==0
+        MD("Square",{Position=Vector2.new(p.X+3,ry),Size=Vector2.new(W-6,Menu.RowH-2),Color=(alt and BG4 or BG3),Filled=true,Transparency=0.85})
+        MD("Text",{Text=k,Position=Vector2.new(p.X+Menu.Pad+3,ry+7),Size=12,Color=TPRI,Outline=true,OutlineColor=Color3.fromRGB(0,0,0)})
 
-        if cfg.Type=="toggle" then
-            local bx2=p.X+W-26; local by2=ry+5; local bs=16
-            local tbg2=MD("Square"); if tbg2 then tbg2.Position=Vector2.new(bx2,by2); tbg2.Size=Vector2.new(bs,bs); tbg2.Color=(cfg.Value and AC or Color3.fromRGB(50,50,62)); tbg2.Filled=true; tbg2.Transparency=1 end
+        if cfg.Type == "toggle" then
+            local bx2=p.X+W-26; local by2=ry+6; local bs=15
+            MD("Square",{Position=Vector2.new(bx2,by2),Size=Vector2.new(bs,bs),Color=(cfg.Value and AC or Color3.fromRGB(44,44,56)),Filled=true,Transparency=1})
             if cfg.Value then
-                local chk=MD("Text"); if chk then chk.Text="✓"; chk.Position=Vector2.new(bx2+2,by2+1); chk.Size=13; chk.Color=Color3.fromRGB(0,0,0); chk.Outline=false end
+                MD("Text",{Text="✓",Position=Vector2.new(bx2+1,by2+1),Size=13,Color=Color3.fromRGB(0,0,0),Outline=false})
             end
-            table.insert(Menu.Rows,{Type="toggle",Key=k,B={X=p.X+4,Y=ry,W=W-8,H=Menu.RowH-2}})
+            table.insert(Menu.Rows,{Type="toggle",Key=k,B={X=p.X+3,Y=ry,W=W-6,H=Menu.RowH-2}})
 
-        elseif cfg.Type=="slider" then
-            local sx=p.X+W/2; local sw=W/2-16; local sy=ry+Menu.RowH/2
-            local min=cfg.Min or 0; local max=cfg.Max or 100
-            local ratio=(cfg.Value-min)/(max-min)
-            local tr=MD("Line"); if tr then tr.From=Vector2.new(sx,sy); tr.To=Vector2.new(sx+sw,sy); tr.Thickness=3; tr.Color=Color3.fromRGB(50,50,62); tr.Transparency=1 end
-            local fl=MD("Line"); if fl then fl.From=Vector2.new(sx,sy); fl.To=Vector2.new(sx+sw*ratio,sy); fl.Thickness=3; fl.Color=AC; fl.Transparency=1 end
-            local hnd=MD("Square"); if hnd then hnd.Position=Vector2.new(sx+sw*ratio-4,sy-4); hnd.Size=Vector2.new(8,8); hnd.Color=Color3.fromRGB(255,255,255); hnd.Filled=true; hnd.Transparency=1 end
-            local vl=MD("Text"); if vl then vl.Text=tostring(math.floor(cfg.Value*100)/100); vl.Position=Vector2.new(sx-5,ry+6); vl.Size=11; vl.Color=TSEC; vl.Outline=false end
+        elseif cfg.Type == "slider" then
+            local sx=p.X+W/2+4; local sw=W/2-22; local sy=ry+Menu.RowH/2
+            local mn=cfg.Min or 0; local mx=cfg.Max or 100
+            local ratio=(cfg.Value-mn)/(mx-mn)
+            -- track bg
+            MD("Square",{Position=Vector2.new(sx,sy-2),Size=Vector2.new(sw,4),Color=Color3.fromRGB(40,40,52),Filled=true,Transparency=1})
+            -- fill
+            MD("Square",{Position=Vector2.new(sx,sy-2),Size=Vector2.new(sw*ratio,4),Color=AC,Filled=true,Transparency=1})
+            -- handle
+            MD("Circle",{Position=Vector2.new(sx+sw*ratio,sy),Radius=5,Color=Color3.fromRGB(255,255,255),Filled=true,Transparency=1})
+            -- value label
+            MD("Text",{Text=tostring(math.floor(cfg.Value*100+0.5)/100),Position=Vector2.new(sx-4,ry+7),Size=10,Color=TSEC,Outline=false})
             table.insert(Menu.Rows,{Type="slider",Key=k,SX=sx,SW=sw,B={X=sx,Y=ry,W=sw,H=Menu.RowH-2}})
 
-        elseif cfg.Type=="dropdown" then
-            local vt=MD("Text"); if vt then vt.Text=tostring(cfg.Value); vt.Position=Vector2.new(p.X+W-80,ry+6); vt.Size=12; vt.Color=AC; vt.Outline=true; vt.OutlineColor=Color3.fromRGB(0,0,0) end
-            local ar=MD("Text"); if ar then ar.Text="▾"; ar.Position=Vector2.new(p.X+W-20,ry+5); ar.Size=13; ar.Color=TSEC; ar.Outline=false end
-            table.insert(Menu.Rows,{Type="dropdown",Key=k,B={X=p.X+W-90,Y=ry,W=80,H=Menu.RowH-2}})
+        elseif cfg.Type == "dropdown" then
+            local dx = p.X+W-95
+            MD("Square",{Position=Vector2.new(dx,ry+5),Size=Vector2.new(86,17),Color=Color3.fromRGB(30,30,40),Filled=true,Transparency=1})
+            MD("Text",{Text=tostring(cfg.Value),Position=Vector2.new(dx+5,ry+7),Size=11,Color=TACT,Outline=false})
+            MD("Text",{Text="▾",Position=Vector2.new(dx+72,ry+6),Size=12,Color=TSEC,Outline=false})
+            table.insert(Menu.Rows,{Type="dropdown",Key=k,B={X=dx,Y=ry+5,W=86,H=17}})
         end
     end
+
+    Menu.Built = true
 end
 
-local function InB(b,m)
+local function InB(b, m)
     return m.X>=b.X and m.X<=b.X+b.W and m.Y>=b.Y and m.Y<=b.Y+b.H
 end
 
-local SDrag={Act=false,Key=nil,Row=nil}
+local SDrag = { Act=false, Key=nil, Row=nil }
 
 function Menu.Tick()
     if not Menu.Vis then return end
-    local ok,mp=pcall(function() return UserInputService:GetMouseLocation() end)
+    local ok, mp = pcall(function() return UserInputService:GetMouseLocation() end)
     if not ok then return end
-    local ok2,mb=pcall(function() return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) end)
+    local ok2, mb = pcall(function() return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) end)
     if not ok2 then return end
-    local now=os.clock()
+    local now = os.clock()
 
-    -- drag header
-    local hB={X=Menu.Pos.X,Y=Menu.Pos.Y,W=Menu.W,H=Menu.HdrH}
+    -- header drag
+    local hB = {X=Menu.Pos.X, Y=Menu.Pos.Y, W=Menu.W, H=Menu.HdrH}
     if mb then
         if not Menu.Drag and not SDrag.Act and InB(hB,mp) then
             Menu.Drag=true; Menu.DragOff=Menu.Pos-mp
         end
         if Menu.Drag then
-            local np=mp+Menu.DragOff
-            local cam=GetCamera()
+            local np = mp + Menu.DragOff
+            local cam = GetCamera()
             if cam then
-                local ok3,vp=pcall(function() return cam.ViewportSize end)
+                local ok3, vp = pcall(function() return cam.ViewportSize end)
                 if ok3 and vp then
-                    np=Vector2.new(math.clamp(np.X,0,vp.X-Menu.W), math.clamp(np.Y,0,vp.Y-60))
+                    np = Vector2.new(math.clamp(np.X,0,vp.X-Menu.W), math.clamp(np.Y,0,vp.Y-60))
                 end
             end
-            if (np-Menu.Pos).Magnitude>0.5 then Menu.Pos=np; Menu.Build() end
+            if (np-Menu.Pos).Magnitude > 0.5 then Menu.Pos=np; Menu.Build() end
         end
-    else Menu.Drag=false end
+    else
+        Menu.Drag = false
+    end
 
     -- slider drag
     if SDrag.Act then
         if mb then
-            local cfg=Settings[SDrag.Key]; local row=SDrag.Row
+            local cfg = Settings[SDrag.Key]; local row = SDrag.Row
             if cfg and row then
-                local ratio=math.clamp((mp.X-row.SX)/row.SW,0,1)
-                local nv=(cfg.Min or 0)+((cfg.Max or 100)-(cfg.Min or 0))*ratio
-                nv=math.floor(nv*100+0.5)/100
-                if math.abs(nv-cfg.Value)>0.005 then cfg.Value=nv; Menu.Build() end
+                local ratio = math.clamp((mp.X - row.SX)/row.SW, 0, 1)
+                local nv = (cfg.Min or 0) + ((cfg.Max or 100)-(cfg.Min or 0))*ratio
+                nv = math.floor(nv*100+0.5)/100
+                if math.abs(nv-cfg.Value) > 0.005 then cfg.Value=nv; Menu.Build() end
             end
-        else SDrag.Act=false; SDrag.Key=nil; SDrag.Row=nil end
+        else
+            SDrag.Act=false; SDrag.Key=nil; SDrag.Row=nil
+        end
         return
     end
 
-    -- clicks
-    if mb and (now-Menu.ClickCD)>0.15 and not Menu.Drag then
-        for _,row in ipairs(Menu.Rows) do
-            if InB(row.B,mp) then
-                Menu.ClickCD=now
-                if row.Type=="tab" then
-                    Menu.ActiveTab=row.Tab; Menu.Build()
-                elseif row.Type=="toggle" then
-                    local cfg=Settings[row.Key]
+    -- single-click actions
+    if mb and (now-Menu.ClickCD) > 0.15 and not Menu.Drag then
+        for _, row in ipairs(Menu.Rows) do
+            if InB(row.B, mp) then
+                Menu.ClickCD = now
+                if row.Type == "tab" then
+                    Menu.ActiveTab = row.Tab; Menu.Build()
+
+                elseif row.Type == "toggle" then
+                    local cfg = Settings[row.Key]
                     if cfg then
-                        cfg.Value=not cfg.Value
+                        cfg.Value = not cfg.Value
                         if row.Key=="Chams" then
                             if cfg.Value then for _,p in ipairs(Players:GetPlayers()) do if p~=LocalPlayer then Chams.Apply(p) end end
                             else for _,p in ipairs(Players:GetPlayers()) do Chams.Remove(p) end end
                         elseif row.Key=="FullBright" then
                             if cfg.Value then FB.On() else FB.Off() end
+                        elseif row.Key=="FOVChanger" then
+                            ApplyFOVChanger()
                         end
                         Menu.Build()
                     end
-                elseif row.Type=="slider" then
+
+                elseif row.Type == "slider" then
                     SDrag.Act=true; SDrag.Key=row.Key; SDrag.Row=row
-                elseif row.Type=="dropdown" then
-                    local cfg=Settings[row.Key]
+
+                elseif row.Type == "dropdown" then
+                    local cfg = Settings[row.Key]
                     if cfg and cfg.Options then
-                        local idx=1
-                        for i,o in ipairs(cfg.Options) do if o==cfg.Value then idx=i; break end end
-                        cfg.Value=cfg.Options[(idx%#cfg.Options)+1]
+                        local idx = 1
+                        for i, o in ipairs(cfg.Options) do if o==cfg.Value then idx=i; break end end
+                        cfg.Value = cfg.Options[(idx % #cfg.Options)+1]
+                        -- downstream effects
+                        if row.Key=="ChamStyle" then
+                            for _,p in ipairs(Players:GetPlayers()) do if p~=LocalPlayer and S("Chams") then Chams.Apply(p) end end
+                        end
                         Menu.Build()
                     end
                 end
@@ -1023,15 +1230,22 @@ function Menu.Tick()
 end
 
 -- ========================================================
--- // KEYBINDS
+-- // KEYBINDS — dynamic key lookup
 -- ========================================================
-Track(UserInputService.InputBegan:Connect(function(input,gp)
+local KeyMap = {
+    Delete = Enum.KeyCode.Delete, End = Enum.KeyCode.End, F9 = Enum.KeyCode.F9,
+    Insert = Enum.KeyCode.Insert, F4  = Enum.KeyCode.F4,  Home= Enum.KeyCode.Home,
+}
+
+Track(UserInputService.InputBegan:Connect(function(input, gp)
     if gp then return end
-    if input.KeyCode==Enum.KeyCode.Delete then Panic.Toggle()
-    elseif input.KeyCode==Enum.KeyCode.Insert then
-        Menu.Vis=not Menu.Vis
+    local panicKC  = KeyMap[S("PanicKey")  or "Delete"]
+    local menuKC   = KeyMap[S("MenuKey")   or "Insert"]
+    if input.KeyCode == panicKC  then Panic.Toggle() return end
+    if input.KeyCode == menuKC   then
+        Menu.Vis = not Menu.Vis
         if Menu.Vis then Menu.Build()
-        else for _,d in ipairs(Menu.Drw) do pcall(function() d:Remove() end) end; Menu.Drw={} end
+        else Menu.ClearDraw() end
     end
 end))
 
@@ -1043,23 +1257,31 @@ end))
 Track(Players.PlayerRemoving:Connect(function(p)
     ESPSys.Remove(p.UserId)
     Chams.Remove(p)
+    VelHistory[p.UserId] = nil
 end))
 
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(0.5)
     Move.Speed()
+    Move.Gravity()
+    ApplyFOVChanger()
 end)
 
 -- ========================================================
 -- // RENDER LOOP
 -- ========================================================
-Track(RunService.RenderStepped:Connect(function()
+local lastDT = 0
+Track(RunService.RenderStepped:Connect(function(dt)
     if Runtime.Dead then return end
-    SafeCall(UpdateFOV)
+    lastDT = dt
+    Runtime.FrameCount += 1
+    SafeCall(UpdateFOV, dt)
     SafeCall(Aimbot.Update)
     SafeCall(TrigBot.Update)
     SafeCall(ESPSys.Update)
     SafeCall(Notif.Tick)
+    SafeCall(XHair.Tick)
+    SafeCall(ApplyFOVChanger)
     if Menu.Vis then SafeCall(Menu.Tick) end
 end))
 
@@ -1071,6 +1293,7 @@ Track(RunService.Heartbeat:Connect(function()
     SafeCall(Move.Fly)
     SafeCall(Move.Noclip)
     SafeCall(Move.Speed)
+    SafeCall(Move.Gravity)
     SafeCall(Chams.Tick)
 end))
 
@@ -1080,8 +1303,8 @@ end))
 SafeCall(function()
     Hooks.Install()
     Menu.Build()
-    Runtime.Loaded=true
-    Notif.Push("BIBILABU HUB","v6.1 loaded — nil-free, we're live boss man.",4,AC)
+    Runtime.Loaded = true
+    Notif.Push("BIBILABU HUB","v7.0 live — hooks clean, nil-free, that's what the hell is going on boss man.",4,AC)
 end)
 
-print("[BIBILABU HUB v6.1] nil-hardened. live.")
+print("[BIBILABU HUB v7.0] zero-nil. hooks stored. live.")
