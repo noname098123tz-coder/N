@@ -1,9 +1,9 @@
 -- ========================================================
--- 0 HUB v9 — FIXED UI BUILD / NON-BLOCKING STARTUP
+-- 0 HUB v9.1 — STABILITY PATCH / NON-BLOCKING STARTUP
 -- ========================================================
 
 -- ========================================================
--- 0 HUB v9 - RIVALS FPS EDITION
+-- 0 HUB v9.1 - RIVALS FPS EDITION
 -- FRAME-BUDGETED | NPC-AWARE | CRASH-PROOF LOOP DECOUPLING
 -- ========================================================
 
@@ -22,7 +22,7 @@ end
 -- // RUNTIME GUARD — budgeted, thread-safe
 -- ========================================================
 local Runtime = {
-    Version    = "9.0.0",
+    Version    = "9.1.0",
     Loaded     = false,
     Errors     = 0,
     MaxErrors  = 60,
@@ -68,13 +68,13 @@ local function SafeCall(fn, budget, ...)
     local args = {...}
     local ok, err = xpcall(
         function() fn(table.unpack(args)) end,
-        function(e) return e .. "\n" .. (debug and debug.traceback and debug.traceback("",2) or "") end
+        function(e) return tostring(e) .. "\n" .. (debug and debug.traceback and debug.traceback("",2) or "") end
     )
     if not ok then
         Runtime.Errors += 1
-        warn(("[0 HUB v8] ERR#%d → %s"):format(Runtime.Errors, tostring(err)))
+        warn(("[0 HUB v9] ERR#%d → %s"):format(Runtime.Errors, tostring(err)))
         if Runtime.Errors >= Runtime.MaxErrors then
-            warn("[0 HUB v8] error cap — killed")
+            warn("[0 HUB v9] error cap — killed")
             Runtime.Dead = true
         end
     end
@@ -138,7 +138,7 @@ local Settings = {
     InfiniteJump     = { Value=false,    Type="toggle",   Tab="Movement" },
     LowGravity       = { Value=false,    Type="toggle",   Tab="Movement" },
     -- Misc
-    AntiBan          = { Value=true,     Type="toggle",   Tab="Misc" },
+    AntiBan          = { Value=false,    Type="toggle",   Tab="Misc" },
     Notifications    = { Value=true,     Type="toggle",   Tab="Misc" },
     PanicKey         = { Value="Delete", Type="dropdown", Tab="Misc",     Options={"Delete","End","F9"} },
     MenuKey          = { Value="Insert", Type="dropdown", Tab="Misc",     Options={"Insert","F4","Home"} },
@@ -325,64 +325,22 @@ local function UpdateFOV(dt)
 end
 
 -- ========================================================
--- // HOOKS — stored original, zero rawget fallback crash
+-- // HOOKS — disabled in V9.1 for client stability
 -- ========================================================
-local Hooks = { Done=false, OrigIndex=nil }
+local Hooks = {
+    Done       = true,
+    OrigIndex  = nil,
+    Disabled   = true,
+    Reason     = "Disabled for client-initialization stability",
+}
+
 function Hooks.Install()
-    if Hooks.Done then return end
-    local banPats = {"ban","kick","detect","cheat","verify","admin","anticheat","report","flag","exploit"}
-
-    pcall(function()
-        if not (getrawmetatable and hookmetamethod and newcclosure and checkcaller and getnamecallmethod) then return end
-        local mt    = getrawmetatable(game)
-        local oldNC = mt.__namecall
-        setreadonly(mt, false)
-        mt.__namecall = newcclosure(function(self, ...)
-            local method = getnamecallmethod()
-            if not checkcaller() and S("AntiBan") then
-                if method=="FireServer" or method=="InvokeServer" then
-                    local nm=""
-                    pcall(function() nm=tostring(rawget(self,"Name") or self.Name or ""):lower() end)
-                    for _, pat in ipairs(banPats) do
-                        if nm:find(pat) then return end
-                    end
-                end
-            end
-            return oldNC(self, ...)
-        end)
-        setreadonly(mt, true)
-    end)
-
-    pcall(function()
-        if not (hookmetamethod and checkcaller) then return end
-        local mt = getrawmetatable(game)
-        local originalIndex = mt.__index  -- STORED before hook
-        Hooks.OrigIndex = originalIndex
-        setreadonly(mt, false)
-        mt.__index = newcclosure(function(self, key)
-            if not checkcaller() and S("SilentAim") then
-                if key=="Hit" or key=="CFrame" then
-                    local t = Target and Target.Get and Target.Get()
-                    if t then
-                        local part = Util.Part(t, S("TargetPart") or "Head")
-                        if part then
-                            local ok, pos = pcall(function() return part.Position end)
-                            if ok and pos then
-                                return CFrame.new(PredictPos(t) or pos)
-                            end
-                        end
-                    end
-                end
-            end
-            if typeof(originalIndex)=="function" then
-                return originalIndex(self, key)
-            end
-            return rawget(self, key)
-        end)
-        setreadonly(mt, true)
-    end)
-
-    Hooks.Done = true
+    -- V9.1 intentionally does NOT modify game metatables.
+    -- The previous global __namecall/__index hooks could interfere with
+    -- the game's own ClientFighter initialization and make debugging
+    -- impossible. Keep the hub independent from ReplicatedFirst/client
+    -- replicated classes.
+    return false
 end
 
 -- ========================================================
@@ -1010,7 +968,7 @@ function Menu.Build()
     MD("Square",{Position=p,Size=Vector2.new(W,totalH),Color=BG1,Filled=true,Transparency=0.96})
     MD("Square",{Position=p,Size=Vector2.new(W,Menu.HdrH),Color=BG2,Filled=true,Transparency=1})
     MD("Square",{Position=p,Size=Vector2.new(3,Menu.HdrH),Color=AC,Filled=true,Transparency=1})
-    MD("Text",{Text="0 HUB  v8",Position=Vector2.new(p.X+12,p.Y+8),Size=15,Color=TPRI,Outline=true,OutlineColor=Color3.fromRGB(0,0,0)})
+    MD("Text",{Text="0 HUB  v9.1",Position=Vector2.new(p.X+12,p.Y+8),Size=15,Color=TPRI,Outline=true,OutlineColor=Color3.fromRGB(0,0,0)})
     MD("Text",{Text="[INS]",Position=Vector2.new(p.X+W-38,p.Y+9),Size=12,Color=TSEC,Outline=false})
     MD("Square",{Position=Vector2.new(p.X,p.Y+Menu.HdrH),Size=Vector2.new(W,Menu.TabH),Color=BG2,Filled=true,Transparency=1})
     for i,tab in ipairs(Menu.Tabs) do
@@ -1146,7 +1104,9 @@ function Menu.Tick()
                     local cfg=Settings[row.Key]
                     if cfg then
                         cfg.Value=not cfg.Value
-                        if row.Key=="Chams" then
+                        if row.Key=="AntiBan" then
+                            -- Intentionally inert in V9.1; no metatable bypass is installed.
+                        elseif row.Key=="Chams" then
                             if cfg.Value then for _,p in ipairs(GetPlayers()) do Chams.Apply(p) end
                             else for _,p in ipairs(GetPlayers()) do Chams.Remove(p) end end
                         elseif row.Key=="FullBright" then if cfg.Value then FB.On() else FB.Off() end
@@ -1244,7 +1204,7 @@ task.defer(function()
     pcall(function()
         Notif.Push(
             "0 HUB",
-            "UI ready — fuck yeah, boss man.",
+            "UI ready — fuck yeah, boss man. Hooks disabled for stability.",
             4,
             AC
         )
@@ -1256,10 +1216,11 @@ task.defer(function()
 end)
 
 task.defer(function()
-    SafeCall(Hooks.Install)
+    -- Hooks intentionally disabled in V9.1 for client stability.
+    Hooks.Install()
 end)
 
-print("[0 HUB v9] UI-first startup complete — persistent reopen overlay enabled.")
+print("[0 HUB v9.1] UI-first startup complete — hooks disabled, persistent reopen overlay enabled.")
 
 -- ========================================================
 -- // V9 — PERSISTENT OVERLAY REOPEN BUTTON
