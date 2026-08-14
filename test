@@ -1,0 +1,28 @@
+local compile = loadstring or load
+
+assert(type(compile) == "function", "Executor khong ho tro loadstring/load")
+
+local ok, source = pcall(function()
+    return game:HttpGet(
+        "https://raw.githubusercontent.com/noname098123tz-coder/N/refs/heads/main/9_2.lua"
+    )
+end)
+
+assert(ok and type(source) == "string" and #source > 0,
+    "Khong tai duoc 9_2.lua")
+
+local chunk, compileErr = compile(source)
+
+assert(type(chunk) == "function",
+    "Compile failed: " .. tostring(compileErr))
+
+local ran, runtimeErr = xpcall(
+    chunk,
+    function(err)
+        return tostring(err) ..
+            "\n" ..
+            (debug and debug.traceback and debug.traceback("", 2) or "")
+    end
+)
+
+assert(ran, runtimeErr)
